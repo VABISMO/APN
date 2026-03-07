@@ -1,0 +1,21 @@
+# ProbNet v9 — Python requirements
+# Install: pip install -r requirements.txt
+
+# Required for HuggingFace model loading + GPU training
+torch>=2.0.0
+transformers>=4.35.0
+accelerate>=0.24.0
+safetensors>=0.4.0
+sentencepiece>=0.1.99
+
+# Always available
+numpy>=1.24.0
+
+# Optional: 8-bit quantization (saves VRAM)
+# bitsandbytes>=0.41.0
+
+# Optional: faster tokenization
+# tokenizers>=0.14.0
+
+# Optional: experiment tracking
+# wandb>=0.16.0
