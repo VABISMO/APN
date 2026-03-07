@@ -262,3 +262,10 @@ APN neurons **permanently specialize** to their optimal function:
 - Neurons as activation gates → `relu`
 
 At LLaMA/Gemma scale (11,000 neurons/layer), thousands of neurons each specialize, creating far richer representations than SwiGLU allows. The hypothesis is this leads to **better sample efficiency on structured data** (math, code, reasoning).
+
+
+## Reference
+V.Nos and E.Santos work . 
+
+https://hackage.haskell.org/package/Probnet
+https://en.wikipedia.org/wiki/Extrapolation
