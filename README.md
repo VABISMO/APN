@@ -1,6 +1,6 @@
-# ProbNet — Adaptive Probabilistic Neuron Transformer
+# APN — Adaptive Probabilistic Neuron Transformer
 
-ProbNet replaces the FFN layers (SwiGLU/GELU) in any transformer with **Adaptive Probabilistic Neurons (APN)**: neurons that learn *which mathematical function to apply* from a bank of 6 bounded functions. Each neuron specializes during training — starting uniform, ending committed to its optimal function.
+APN replaces the FFN layers (SwiGLU/GELU) in any transformer with **Adaptive Probabilistic Neurons (APN)**: neurons that learn *which mathematical function to apply* from a bank of 6 bounded functions. Each neuron specializes during training — starting uniform, ending committed to its optimal function.
 
 Compatible with **Gemma, LLaMA, Mistral, Qwen, Phi, GPT-2** and any HuggingFace SwiGLU/GELU model.
 
