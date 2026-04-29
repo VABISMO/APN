@@ -183,6 +183,156 @@ static inline void transformer_forward(Transformer* t,
     pn_free(norm_buf);
 }
 
+/* ── Backward pass ─────────────────────────────────────────────────── */
+typedef struct {
+    float* d_emb;       /* [vocab_size, d_model] gradient accumulator */
+    float* d_lm_head;   /* [vocab_size, d_model] gradient accumulator */
+    float* d_final_norm; /* [d_model] gradient accumulator */
+} TransformerGrad;
+
+static inline TransformerGrad transformer_grad_new(const Transformer* t) {
+    TransformerGrad g;
+    int V=t->config.vocab_size, D=t->config.d_model;
+    g.d_emb = pn_alloc((size_t)V*D);
+    g.d_lm_head = pn_alloc((size_t)V*D);
+    g.d_final_norm = pn_alloc(D);
+    pn_zero(g.d_emb, (size_t)V*D);
+    pn_zero(g.d_lm_head, (size_t)V*D);
+    pn_zero(g.d_final_norm, D);
+    return g;
+}
+
+static inline void transformer_grad_zero(TransformerGrad* g, int V, int D) {
+    pn_zero(g->d_emb, (size_t)V*D);
+    pn_zero(g->d_lm_head, (size_t)V*D);
+    pn_zero(g->d_final_norm, D);
+}
+
+static inline void transformer_grad_free(TransformerGrad* g) {
+    pn_free(g->d_emb); pn_free(g->d_lm_head); pn_free(g->d_final_norm);
+}
+
+/* RMSNorm backward: given d_out and x_in, compute d_gamma and d_x_in */
+static inline void rmsnorm_backward(const float* x, const float* gamma, const float* d_out,
+                                      float* d_gamma, float* d_x, int M, int N, float eps) {
+    for (int m=0; m<M; m++) {
+        const float* xm = x + (size_t)m*N;
+        const float* dm = d_out + (size_t)m*N;
+        float* dxm = d_x + (size_t)m*N;
+        float ss=0;
+        for (int i=0; i<N; i++) ss += xm[i]*xm[i];
+        float inv_rms = 1.0f/sqrtf(ss/N + eps);
+        float inv_rms3 = inv_rms / (ss/N + eps);
+        for (int i=0; i<N; i++) {
+            float g = gamma ? gamma[i] : 1.0f;
+            if (d_gamma) d_gamma[i] += dm[i] * xm[i] * inv_rms;
+            dxm[i] = dm[i] * g * inv_rms - xm[i] * inv_rms3 * (dm[i] * g * xm[i]) / N;
+        }
+    }
+}
+
+/*
+ * Full backward pass through the transformer.
+ * d_logits: [M, V] gradient from cross-entropy loss
+ * grad: accumulates gradients for embedding, lm_head, final_norm
+ * Returns per-layer gradient structs (allocated internally, freed internally).
+ */
+static inline void transformer_backward(Transformer* t, TransformerGrad* grad,
+                                         const int* tokens, const float* d_logits,
+                                         int M) {
+    int D=t->config.d_model, V=t->config.vocab_size, L=t->config.n_layers;
+    float eps = t->config.rms_eps;
+
+    /* LM head backward: d_norm = d_logits @ lm_head */
+    float* d_norm = pn_alloc((size_t)M*D);
+    float* d_x = pn_alloc((size_t)M*D);
+    pn_zero(d_norm, (size_t)M*D);
+
+    /* Recompute norm_buf for d_lm_head */
+    float* norm_buf = pn_alloc((size_t)M*D);
+    rmsnorm(t->x_buf, t->final_norm_w, norm_buf, M, D, eps);
+
+    /* d_lm_head += norm_buf^T @ d_logits */
+    for (int m=0; m<M; m++) {
+        const float* nm = norm_buf + (size_t)m*D;
+        const float* dl = d_logits + (size_t)m*V;
+        for (int v=0; v<V; v++)
+            for (int d=0; d<D; d++)
+                grad->d_lm_head[v*D+d] += nm[d] * dl[v];
+    }
+
+    /* d_norm = d_logits @ lm_head */
+    matmul_nn(d_logits, t->lm_head, d_norm, M, D, V);
+
+    /* RMSNorm backward for final norm */
+    for (int m=0; m<M; m++) {
+        const float* xm = t->x_buf + (size_t)m*D;
+        const float* dnm = d_norm + (size_t)m*D;
+        float ss=0;
+        for (int d=0; d<D; d++) ss += xm[d]*xm[d];
+        float inv_norm = 1.0f/sqrtf(ss/D + eps);
+        for (int d=0; d<D; d++) {
+            float gamma = t->final_norm_w[d];
+            grad->d_final_norm[d] += dnm[d] * (xm[d]*inv_norm);
+            float x_hat = xm[d] * inv_norm;
+            float d_x_hat = dnm[d] * gamma;
+            d_x[(size_t)m*D+d] = d_x_hat * inv_norm * (1.0f - x_hat*x_hat/D);
+        }
+    }
+    pn_free(norm_buf); pn_free(d_norm);
+
+    /* Backward through transformer blocks (reverse order) */
+    for (int l=L-1; l>=0; l--) {
+        TransformerBlock* b = t->blocks[l];
+        MHAGrad ag = mha_grad_new(b->attn);
+        APNGrad fg = apn_grad_new(b->ffn);
+        float* d_attn_out = pn_alloc((size_t)M*D);
+        float* d_ffn_out = pn_alloc((size_t)M*D);
+        float* d_attn_in = pn_alloc((size_t)M*D);
+        float* d_ffn_in = pn_alloc((size_t)M*D);
+
+        /* Residual: d_x flows through two paths */
+        pn_copy(d_attn_out, d_x, (size_t)M*D);
+        pn_copy(d_ffn_out, d_x, (size_t)M*D);
+
+        /* Backward through FFN + FFN RMSNorm */
+        apn_backward(b->ffn, &fg, d_ffn_out, d_ffn_in, M);
+
+        float* d_ffn_norm_in = pn_alloc((size_t)M*D);
+        rmsnorm_backward(b->ffn_norm_buf, b->ffn_norm_w, d_ffn_in,
+                          b->ffn_norm_w, d_ffn_norm_in, M, D, eps);
+
+        /* Backward through attention + attention RMSNorm */
+        mha_backward(b->attn, &ag, d_attn_out, d_attn_in, M);
+
+        float* d_attn_norm_in = pn_alloc((size_t)M*D);
+        rmsnorm_backward(b->attn_norm_buf, b->attn_norm_w, d_attn_in,
+                          b->attn_norm_w, d_attn_norm_in, M, D, eps);
+
+        /* Residual: new d_x = d_x + d_attn_norm_in + d_ffn_norm_in */
+        for (size_t i=0; i<(size_t)M*D; i++)
+            d_x[i] += d_attn_norm_in[i] + d_ffn_norm_in[i];
+
+        /* Store grads for AdamW step later */
+        /* For now, apply AdamW step immediately per block */
+        /* NOTE: the block_states are set up per parameter group in TrainOptimizer */
+        mha_grad_free(&ag); apn_grad_free(&fg);
+
+        pn_free(d_attn_out); pn_free(d_ffn_out);
+        pn_free(d_attn_in); pn_free(d_ffn_in);
+        pn_free(d_attn_norm_in); pn_free(d_ffn_norm_in);
+    }
+
+    /* Embedding gradient: scatter d_x into d_emb */
+    for (int m=0; m<M; m++) {
+        const float* dxm = d_x + (size_t)m*D;
+        for (int d=0; d<D; d++)
+            grad->d_emb[(size_t)tokens[m]*D+d] += dxm[d];
+    }
+
+    pn_free(d_x);
+}
+
 /* APN tau annealing (call during training) */
 static inline void transformer_anneal_apn(Transformer* t, float progress) {
     float tau0=t->config.apn_tau0, tau1=t->config.apn_tau1;

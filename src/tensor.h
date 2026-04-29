@@ -224,8 +224,8 @@ static inline int sample_categorical(const float* probs, int V, RNG* rng) {
     return V-1;
 }
 
-/* Top-p (nucleus) sampling */
-static inline int sample_topp(float* logits, int V, float p, float temp, RNG* rng) {
+/* Top-p (nucleus) sampling — thread-safe, idx_buf must be V ints */
+static inline int sample_topp(float* logits, int V, float p, float temp, RNG* rng, int* idx_buf) {
     apply_temperature(logits, V, temp);
     /* compute softmax */
     float mx=-FLT_MAX;
@@ -234,16 +234,14 @@ static inline int sample_topp(float* logits, int V, float p, float temp, RNG* rn
     for(int i=0;i<V;i++){logits[i]=expf(logits[i]-mx);sum+=logits[i];}
     for(int i=0;i<V;i++) logits[i]/=sum;
     /* sort indices by prob descending */
-    static int idx[200000]; /* max vocab */
-    for(int i=0;i<V;i++) idx[i]=i;
+    for(int i=0;i<V;i++) idx_buf[i]=i;
     /* partial sort: find nucleus */
     float cum=0; int cutoff=V;
-    /* bubble top-p tokens to front */
     for(int i=0;i<V&&cum<p;i++){
         int best=i;
         for(int j=i+1;j<V;j++) if(logits[j]>logits[best]) best=j;
         float tmp=logits[i];logits[i]=logits[best];logits[best]=tmp;
-        int ti=idx[i];idx[i]=idx[best];idx[best]=ti;
+        int ti=idx_buf[i];idx_buf[i]=idx_buf[best];idx_buf[best]=ti;
         cum+=logits[i];
         if(cum>=p){cutoff=i+1;break;}
     }
@@ -251,11 +249,11 @@ static inline int sample_topp(float* logits, int V, float p, float temp, RNG* rn
     float s2=0; for(int i=0;i<cutoff;i++) s2+=logits[i];
     for(int i=0;i<cutoff;i++) logits[i]/=s2;
     int pick=sample_categorical(logits,cutoff,rng);
-    return idx[pick];
+    return idx_buf[pick];
 }
 
-/* Top-k sampling */
-static inline int sample_topk(float* logits, int V, int k, float temp, RNG* rng) {
+/* Top-k sampling — thread-safe, idx_buf must be V ints */
+static inline int sample_topk(float* logits, int V, int k, float temp, RNG* rng, int* idx_buf) {
     apply_temperature(logits, V, temp);
     if (k >= V) {
         float mx=-FLT_MAX;
@@ -266,17 +264,16 @@ static inline int sample_topk(float* logits, int V, int k, float temp, RNG* rng)
         return sample_categorical(logits,V,rng);
     }
     /* find top-k */
-    static int idx[200000];
-    for(int i=0;i<V;i++) idx[i]=i;
+    for(int i=0;i<V;i++) idx_buf[i]=i;
     for(int i=0;i<k;i++){
         int best=i;
         for(int j=i+1;j<V;j++) if(logits[j]>logits[best]) best=j;
         float tmp=logits[i];logits[i]=logits[best];logits[best]=tmp;
-        int ti=idx[i];idx[i]=idx[best];idx[best]=ti;
+        int ti=idx_buf[i];idx_buf[i]=idx_buf[best];idx_buf[best]=ti;
     }
     float mx=logits[0],sum=0;
     for(int i=0;i<k;i++){logits[i]=expf(logits[i]-mx);sum+=logits[i];}
     for(int i=0;i<k;i++) logits[i]/=sum;
     int pick=sample_categorical(logits,k,rng);
-    return idx[pick];
+    return idx_buf[pick];
 }

@@ -88,6 +88,7 @@ static inline int* generate(Transformer* model, Tokenizer* tok,
     int past_len = prompt_len;
 
     /* ── Autoregressive decode ── */
+    int* sample_idx = (int*)malloc((size_t)V * sizeof(int));
     while (n_generated < max_new) {
         /* Apply repetition penalty */
         apply_rep_penalty(last_logits, V, all_ids, past_len, cfg->repetition_penalty);
@@ -102,12 +103,12 @@ static inline int* generate(Transformer* model, Tokenizer* tok,
         } else if (cfg->top_p > 0.0f && cfg->top_p < 1.0f) {
             float* tmp = pn_alloc(V);
             pn_copy(tmp, last_logits, V);
-            next_id = sample_topp(tmp, V, cfg->top_p, cfg->temperature, &rng);
+            next_id = sample_topp(tmp, V, cfg->top_p, cfg->temperature, &rng, sample_idx);
             pn_free(tmp);
         } else if (cfg->top_k > 0) {
             float* tmp = pn_alloc(V);
             pn_copy(tmp, last_logits, V);
-            next_id = sample_topk(tmp, V, cfg->top_k, cfg->temperature, &rng);
+            next_id = sample_topk(tmp, V, cfg->top_k, cfg->temperature, &rng, sample_idx);
             pn_free(tmp);
         } else {
             float* tmp = pn_alloc(V);
@@ -149,7 +150,7 @@ static inline int* generate(Transformer* model, Tokenizer* tok,
 
     if (cfg->stream) printf("\n");
 
-    pn_free(logits); pn_free(last_logits); free(all_ids);
+    free(sample_idx); pn_free(logits); pn_free(last_logits); free(all_ids);
     *n_new = n_generated;
     return new_ids;
 }

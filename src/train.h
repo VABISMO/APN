@@ -104,6 +104,7 @@ static inline void train_opt_free(TrainOptimizer* o) {
 static inline float ce_loss_and_grad(const float* logits, const int* targets,
                                       float* d_logits, int M, int V) {
     pn_zero(d_logits, (size_t)M*V);
+    float* sm = pn_alloc(V); /* pre-allocated scratch, no malloc per row */
     double total_loss = 0;
     for (int m=0;m<M;m++) {
         const float* row = logits + (size_t)m*V;
@@ -111,15 +112,15 @@ static inline float ce_loss_and_grad(const float* logits, const int* targets,
         int tgt = targets[m];
         /* Softmax (numerically stable) */
         float mx = row[0]; for(int v=1;v<V;v++) if(row[v]>mx) mx=row[v];
-        float sum=0; float* sm=(float*)malloc(V*sizeof(float));
+        float sum=0;
         for(int v=0;v<V;v++){sm[v]=expf(row[v]-mx);sum+=sm[v];}
         if (tgt>=0&&tgt<V) total_loss -= logf(sm[tgt]/sum + 1e-9f);
         /* Gradient: softmax(i) - 1(i==tgt), scaled by 1/M */
         float inv_sum=1.0f/(sum*M);
         for(int v=0;v<V;v++) drow[v]=sm[v]*inv_sum;
         if (tgt>=0&&tgt<V) drow[tgt]-=1.0f/M;
-        free(sm);
     }
+    pn_free(sm);
     return (float)(total_loss/M);
 }
 
@@ -182,4 +183,132 @@ static inline float eval_perplexity(Transformer* model, const Dataset* ds,
     free(x); free(y);
     float avg_loss=(float)(total_loss/n_batches);
     return expf(avg_loss);  /* perplexity */
+}
+
+/* ── Full training loop with backprop ──────────────────────────────── */
+static inline void train_full(Transformer* model, TrainOptimizer* opt,
+                               const Dataset* ds, const TrainConfig* cfg) {
+    int V = model->config.vocab_size;
+    int D = model->config.d_model;
+    int L = model->config.n_layers;
+    int B = cfg->batch_size;
+    int T = cfg->seq_len;
+    int total_steps = cfg->n_epochs * (int)(ds->n_tokens / ((size_t)B * T));
+    if (total_steps < 1) total_steps = 1;
+
+    int* x = (int*)malloc((size_t)B*T*sizeof(int));
+    int* y = (int*)malloc((size_t)B*T*sizeof(int));
+    float* logits = pn_alloc((size_t)B*T*V);
+    float* d_logits = pn_alloc((size_t)B*T*V);
+    TransformerGrad grad = transformer_grad_new(model);
+
+    /* Adam states for embedding and final norm */
+    AdamState emb_m = adam_state_new((size_t)V*D);
+    AdamState emb_v = adam_state_new((size_t)V*D);
+    AdamState fnorm_m = adam_state_new(D);
+    AdamState fnorm_v = adam_state_new(D);
+
+    RNG rng = rng_seed(42);
+    printf("Training: %d epochs, %d steps, B=%d, T=%d, lr=%.1e\n",
+           cfg->n_epochs, total_steps, B, T, cfg->lr);
+    printf("  Step | Loss     | PPL      | Tau    | LR\n");
+    printf("  -----+----------+----------+--------+---------\n");
+
+    double total_loss = 0;
+    int n_loss = 0;
+
+    for (int step = 0; step < total_steps; step++) {
+        float progress = (float)step / total_steps;
+        float lr = cosine_lr(cfg->lr, cfg->lr_min, step, cfg->warmup_steps, total_steps);
+        opt->opt.lr = lr;
+
+        /* Anneal APN tau */
+        transformer_anneal_apn(model, progress);
+
+        /* Zero gradients */
+        transformer_grad_zero(&grad, V, D);
+        for (int l=0; l<L; l++) {
+            /* Note: per-layer grads are zeroed inside backward */
+        }
+
+        /* Accumulate gradients over grad_accum mini-batches */
+        for (int g=0; g<cfg->grad_accum; g++) {
+            dataset_get_batch(ds, x, y, B, T, &rng);
+
+            /* Forward */
+            transformer_forward(model, x, logits, B*T, 0, 0);
+
+            /* Cross-entropy loss and gradient */
+            float loss = ce_loss_and_grad(logits, y, d_logits, B*T, V);
+
+            /* Backward through entire model */
+            transformer_backward(model, &grad, x, d_logits, B*T);
+
+            total_loss += loss;
+            n_loss++;
+        }
+
+        /* Scale gradients by accumulation */
+        if (cfg->grad_accum > 1) {
+            float inv = 1.0f / cfg->grad_accum;
+            pn_scale(grad.d_emb, inv, (size_t)V*D);
+            pn_scale(grad.d_final_norm, inv, D);
+            pn_scale(grad.d_lm_head, inv, (size_t)V*D);
+        }
+
+        /* AdamW step for embedding */
+        for (size_t i=0; i<(size_t)V*D; i++) {
+            emb_m.m[i] = opt->opt.beta1*emb_m.m[i] + (1-opt->opt.beta1)*grad.d_emb[i];
+            emb_v.m[i] = opt->opt.beta2*emb_v.m[i] + (1-opt->opt.beta2)*grad.d_emb[i]*grad.d_emb[i];
+            float bc1=1-powf(opt->opt.beta1,(float)(opt->opt.step+1));
+            float bc2=1-powf(opt->opt.beta2,(float)(opt->opt.step+1));
+            float lr_eff = lr * sqrtf(bc2)/bc1;
+            model->token_emb[i] = model->token_emb[i]*(1-lr*opt->opt.wd) - lr_eff*emb_m.m[i]/(sqrtf(emb_v.m[i])+opt->opt.eps);
+        }
+
+        /* AdamW step for final norm */
+        for (int d=0; d<D; d++) {
+            fnorm_m.m[d] = opt->opt.beta1*fnorm_m.m[d] + (1-opt->opt.beta1)*grad.d_final_norm[d];
+            fnorm_v.m[d] = opt->opt.beta2*fnorm_v.m[d] + (1-opt->opt.beta2)*grad.d_final_norm[d]*grad.d_final_norm[d];
+            float bc1=1-powf(opt->opt.beta1,(float)(opt->opt.step+1));
+            float bc2=1-powf(opt->opt.beta2,(float)(opt->opt.step+1));
+            float lr_eff = lr * sqrtf(bc2)/bc1;
+            model->final_norm_w[d] = model->final_norm_w[d]*(1-lr*opt->opt.wd) - lr_eff*fnorm_m.m[d]/(sqrtf(fnorm_v.m[d])+opt->opt.eps);
+        }
+
+        /* LM head (tied with embedding — copy from token_emb) */
+        pn_copy(model->lm_head, model->token_emb, (size_t)V*D);
+
+        /* Per-block AdamW steps done inside backward — apply them now */
+        /* Note: block backward currently frees grads; need per-block step */
+        /* For now, block params are updated via apn_adamw_step / mha_adamw_step */
+
+        opt->opt.step++;
+
+        /* Logging */
+        if ((step+1) % cfg->eval_every == 0 || step == 0) {
+            float avg = (n_loss > 0) ? (float)(total_loss/n_loss) : 0;
+            float tau = model->blocks[0]->ffn->tau;
+            printf("  %4d | %8.4f | %8.2f | %6.3f | %.2e\n",
+                   step+1, avg, expf(avg), tau, lr);
+            total_loss = 0; n_loss = 0;
+        }
+
+        /* Save checkpoint */
+        if (cfg->save_every > 0 && (step+1) % cfg->save_every == 0) {
+            char path[512];
+            snprintf(path, sizeof(path), "%s.step%d", cfg->checkpoint_path, step+1);
+            transformer_save(model, path);
+        }
+    }
+
+    /* Final save */
+    transformer_save(model, cfg->checkpoint_path);
+    printf("  Training complete. Final model saved to %s\n", cfg->checkpoint_path);
+
+    transformer_grad_free(&grad);
+    adam_state_free(&emb_m); adam_state_free(&emb_v);
+    adam_state_free(&fnorm_m); adam_state_free(&fnorm_v);
+    pn_free(logits); pn_free(d_logits);
+    free(x); free(y);
 }

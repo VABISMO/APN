@@ -10,12 +10,14 @@
  *   ./probnet info    --model model.pnet
  *
  * Compile:
- *   gcc -O3 -march=native -mavx512f -mavx512dq -mavx512bw -mfma \
+ *   # With AVX-512 (if CPU supports it):
+ *   gcc -O3 -mavx512f -mavx512dq -mavx512bw -mfma \
  *       -ffast-math -funroll-loops -fopenmp \
  *       -o probnet probnet_main.c -lm
  *
- *   # Without AVX-512 (fallback):
- *   gcc -O2 -march=native -mfma -fopenmp -o probnet probnet_main.c -lm
+ *   # Without AVX-512 (auto-detected fallback):
+ *   gcc -O3 -march=native -mfma -ffast-math -funroll-loops -fopenmp \
+ *       -o probnet probnet_main.c -lm
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -34,6 +36,7 @@
 #include "src/tokenizer.h"
 #include "src/generate.h"
 #include "src/train.h"
+#include "src/etok_bridge.h"
 
 static double now_s(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts);
@@ -62,6 +65,7 @@ static void cmd_bench(void) {
     printf(  "║  ProbNet Benchmark: APN v9 vs SwiGLU vs Linear                  ║\n");
     printf(  "║  7 regression tasks × 3 seeds  |  D=16  H=64  N=800  E=600      ║\n");
     printf(  "╚══════════════════════════════════════════════════════════════════╝\n\n");
+    fflush(stdout);
 
     int N=800,D=16,H=64,NTR=640,NTE=160,EPOCHS=600;
     float LR=2e-3f;
@@ -250,6 +254,7 @@ static void usage(const char* prog) {
     printf("Commands:\n");
     printf("  bench              Run APN vs SwiGLU vs Linear regression benchmark\n");
     printf("  train              Train model from scratch on text corpus\n");
+    printf("  train_bpe          Train with BPE tokenization (auto-vocab)\n");
     printf("  generate           Generate text from a trained model\n");
     printf("  chat               Interactive chat with a trained model\n");
     printf("  info               Show model architecture info\n\n");
@@ -274,6 +279,7 @@ static void usage(const char* prog) {
     printf("Examples:\n");
     printf("  %s bench\n", prog);
     printf("  %s train --data corpus.txt --out mymodel.pnet --d_model 256 --n_layers 4\n", prog);
+    printf("  %s train_bpe --data corpus.txt --vocab vocab.txt --out mymodel.pnet\n", prog);
     printf("  %s generate --model mymodel.pnet --prompt \"Once upon\" --max_tokens 100\n", prog);
     printf("  %s chat --model mymodel.pnet\n", prog);
     printf("  %s info --model mymodel.pnet\n\n", prog);
@@ -316,6 +322,32 @@ int main(int argc, char** argv) {
             else if(!strcmp(argv[i],"--epochs"))epochs=atoi(argv[++i]);
         }
         cmd_train_scratch(data,out,d_model,n_layers,n_heads,ffn_hidden,batch,seq_len,epochs,lr);
+        return 0;
+    }
+
+    /* ── train_bpe ── */
+    if (strcmp(cmd,"train_bpe")==0) {
+        const char* data="corpus.txt", *out="model.pnet", *vocab="vocab.txt";
+        int d_model=256,n_layers=4,n_heads=8,ffn_hidden=1024;
+        int batch=16,seq_len=128,epochs=10,target_vocab=8000;
+        float lr=3e-4f;
+        for(int i=2;i<argc-1;i++){
+            if(!strcmp(argv[i],"--data"))data=argv[++i];
+            else if(!strcmp(argv[i],"--out"))out=argv[++i];
+            else if(!strcmp(argv[i],"--vocab"))vocab=argv[++i];
+            else if(!strcmp(argv[i],"--d_model"))d_model=atoi(argv[++i]);
+            else if(!strcmp(argv[i],"--n_layers"))n_layers=atoi(argv[++i]);
+            else if(!strcmp(argv[i],"--n_heads"))n_heads=atoi(argv[++i]);
+            else if(!strcmp(argv[i],"--ffn_hidden"))ffn_hidden=atoi(argv[++i]);
+            else if(!strcmp(argv[i],"--batch"))batch=atoi(argv[++i]);
+            else if(!strcmp(argv[i],"--seq_len"))seq_len=atoi(argv[++i]);
+            else if(!strcmp(argv[i],"--lr"))lr=atof(argv[++i]);
+            else if(!strcmp(argv[i],"--epochs"))epochs=atoi(argv[++i]);
+            else if(!strcmp(argv[i],"--target_vocab"))target_vocab=atoi(argv[++i]);
+        }
+        train_with_bpe(data, out, vocab, target_vocab,
+                        d_model, n_layers, n_heads, ffn_hidden,
+                        batch, seq_len, epochs, lr);
         return 0;
     }
 

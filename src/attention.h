@@ -92,7 +92,7 @@ static inline void mha_ensure(MHAttention* a, int M) {
     a->q_save   = pn_alloc((size_t)M*H*hd);
     a->k_save   = pn_alloc((size_t)M*Hkv*hd);
     a->v_save   = pn_alloc((size_t)M*Hkv*hd);
-    a->attn_save= pn_alloc((size_t)M*H*M);
+    a->attn_save= pn_alloc((size_t)M*H*M);  /* training: kv_len_total == M */
     a->x_save   = pn_alloc((size_t)M*D);
     a->M_cache  = M;
 }
@@ -147,42 +147,57 @@ static inline void mha_forward(MHAttention* a, const float* x, float* out,
 
     float scale = 1.0f / sqrtf((float)hd);
     float* attn_out = pn_alloc((size_t)M*H*hd);
-    float* attn_w   = pn_alloc((size_t)M*kv_len_total);
+    float* attn_w   = pn_alloc((size_t)M*H*kv_len_total);
 
     for (int h=0;h<H;h++) {
         int hkv = h % Hkv;  /* GQA: multiple Q heads share one KV head */
         for (int m=0;m<M;m++) {
             float* q = a->q_save + (size_t)m*H*hd + (size_t)h*hd;
+            float* aw = attn_w + (size_t)m*H*kv_len_total + (size_t)h*kv_len_total;
             /* Compute attention scores */
             for (int kp=0;kp<kv_len_total;kp++) {
                 float* k = (float*)K_full + (size_t)kp*Hkv*hd + (size_t)hkv*hd;
-                attn_w[m*kv_len_total+kp] = dot_avx512(q, k, hd) * scale;
+                aw[kp] = dot_avx512(q, k, hd) * scale;
             }
             /* Causal mask: future positions → -inf */
             int cur_pos = past_len + m;
             for (int kp=cur_pos+1;kp<kv_len_total;kp++)
-                attn_w[m*kv_len_total+kp] = -1e9f;
+                aw[kp] = -1e9f;
         }
         /* Softmax over key dimension */
-        softmax_rows(attn_w, M, kv_len_total);
-
+        for (int m=0;m<M;m++) {
+            float* aw = attn_w + (size_t)m*H*kv_len_total + (size_t)h*kv_len_total;
+            float mx=-FLT_MAX;
+            for (int kp=0;kp<kv_len_total;kp++) if(aw[kp]>mx) mx=aw[kp];
+            float s=0;
+            for (int kp=0;kp<kv_len_total;kp++){aw[kp]=expf(aw[kp]-mx);s+=aw[kp];}
+            for (int kp=0;kp<kv_len_total;kp++) aw[kp]/=s;
+        }
         /* Weighted sum of values */
         for (int m=0;m<M;m++) {
             float* ao = attn_out + (size_t)m*H*hd + (size_t)h*hd;
+            float* aw = attn_w + (size_t)m*H*kv_len_total + (size_t)h*kv_len_total;
             pn_zero(ao, hd);
             for (int kp=0;kp<kv_len_total;kp++) {
-                float w = attn_w[m*kv_len_total+kp];
+                float w = aw[kp];
                 float* v = (float*)V_full + (size_t)kp*Hkv*hd + (size_t)hkv*hd;
                 pn_add_scaled(ao, v, w, hd);
             }
         }
     }
-    pn_free(attn_w);
+
+    /* Save attention weights for backward (training only, no KV cache) */
+    if (!use_cache) {
+        /* Re-alloc attn_save with correct size and copy */
+        pn_free(a->attn_save);
+        a->attn_save = pn_alloc((size_t)M*H*kv_len_total);
+        pn_copy(a->attn_save, attn_w, (size_t)M*H*kv_len_total);
+    }
 
     /* Output projection */
     matmul_nt(attn_out, a->W_o, out, M, D, H*hd);
     add_bias(out, a->b_o, M, D);
-    pn_free(attn_out);
+    pn_free(attn_w); pn_free(attn_out);
 }
 
 /* Gradient state for MHA */
@@ -217,4 +232,142 @@ static inline void mha_adamw_step(MHAttention* a, MHAGrad* g, AdamW* opt,
     adamw_step(opt,sv,a->b_v,g->db_v,Hkv*hd);
     adamw_step(opt,so,a->W_o,g->dW_o,(size_t)D*H*hd);
     adamw_step(opt,so,a->b_o,g->db_o,D);
+}
+
+/*
+ * Backward pass for multi-head attention.
+ * dout: [M, D] gradient from next layer
+ * dx:   [M, D] gradient flowing back to previous layer (output)
+ *
+ * Computes gradients for all weight matrices and propagates to input.
+ * Only supports the training (non-KV-cache) path: M == kv_len_total.
+ */
+static inline void mha_backward(MHAttention* a, MHAGrad* g,
+                                 const float* dout, float* dx, int M) {
+    int D=a->d_model, H=a->n_heads, Hkv=a->n_kv_heads, hd=a->head_dim;
+    pn_zero(g->dW_q,(size_t)H*hd*D); pn_zero(g->db_q,H*hd);
+    pn_zero(g->dW_k,(size_t)Hkv*hd*D); pn_zero(g->db_k,Hkv*hd);
+    pn_zero(g->dW_v,(size_t)Hkv*hd*D); pn_zero(g->db_v,Hkv*hd);
+    pn_zero(g->dW_o,(size_t)D*H*hd); pn_zero(g->db_o,D);
+    if (dx) pn_zero(dx,(size_t)M*D);
+
+    float* d_attn_out = pn_alloc((size_t)M*H*hd);
+    pn_zero(d_attn_out, (size_t)M*H*hd);
+
+    /* Gradient through output projection W_o: d_attn_out = dout @ W_o^T */
+    for (int m=0; m<M; m++) {
+        const float* dr = dout + (size_t)m*D;
+        for (int h=0; h<H; h++) {
+            for (int d=0; d<hd; d++) {
+                float s=0;
+                for (int o=0; o<D; o++)
+                    s += dr[o] * a->W_o[(size_t)h*hd*D + d*D + o];
+                d_attn_out[m*H*hd + h*hd + d] = s;
+            }
+        }
+    }
+
+    /* Accumulate dW_o and db_o */
+    for (int m=0; m<M; m++) {
+        for (int o=0; o<D; o++) g->db_o[o] += dout[m*D+o];
+        for (int h=0; h<H; h++) {
+            for (int d=0; d<hd; d++) {
+                float da = d_attn_out[(size_t)m*H*hd + (size_t)h*hd + d];
+                for (int o=0; o<D; o++)
+                    g->dW_o[(size_t)h*hd*D + (size_t)d*D + o] += da * dout[m*D+o];
+            }
+        }
+    }
+
+    /* Backprop through attention weights and values */
+    float* d_attn_w = pn_alloc((size_t)M*H*M);
+    float* d_q = pn_alloc((size_t)M*H*hd);
+    float* d_k = pn_alloc((size_t)M*Hkv*hd);
+    float* d_v = pn_alloc((size_t)M*Hkv*hd);
+    pn_zero(d_q, (size_t)M*H*hd);
+    pn_zero(d_k, (size_t)M*Hkv*hd);
+    pn_zero(d_v, (size_t)M*Hkv*hd);
+
+    float scale = 1.0f / sqrtf((float)hd);
+    int S = M; /* sequence length == kv_len_total in training */
+
+    for (int h=0; h<H; h++) {
+        int hkv = h % Hkv;
+        for (int m=0; m<M; m++) {
+            float* aw = a->attn_save + (size_t)m*H*S + (size_t)h*S;
+            float* daw = d_attn_w + (size_t)m*H*S + (size_t)h*S;
+
+            /* dot product of d_attn_out with value for this head */
+            float dot = 0;
+            for (int d2=0; d2<hd; d2++)
+                dot += d_attn_out[(size_t)m*H*hd + (size_t)h*hd + d2] *
+                       a->v_save[(size_t)m*Hkv*hd + (size_t)hkv*hd + d2];
+
+            /* softmax backward: d_w = w * (d_out_v - dot) for each key position */
+            for (int kp=0; kp<S; kp++) {
+                float val_dot = 0;
+                for (int d2=0; d2<hd; d2++)
+                    val_dot += d_attn_out[(size_t)m*H*hd + (size_t)h*hd + d2] *
+                               a->v_save[(size_t)kp*Hkv*hd + (size_t)hkv*hd + d2];
+                daw[kp] = aw[kp] * (val_dot - dot);
+            }
+
+            /* Gradient w.r.t. value: d_v += attn_weight * d_attn_out */
+            for (int kp=0; kp<S; kp++) {
+                for (int d2=0; d2<hd; d2++)
+                    d_v[(size_t)kp*Hkv*hd + (size_t)hkv*hd + d2] +=
+                        aw[kp] * d_attn_out[(size_t)m*H*hd + (size_t)h*hd + d2];
+            }
+
+            /* Gradient w.r.t. key: d_k += scale * daw * q */
+            for (int kp=0; kp<S; kp++) {
+                for (int d2=0; d2<hd; d2++)
+                    d_k[(size_t)kp*Hkv*hd + (size_t)hkv*hd + d2] +=
+                        daw[kp] * a->q_save[(size_t)m*H*hd + (size_t)h*hd + d2] * scale;
+            }
+
+            /* Gradient w.r.t. query: d_q += scale * sum_k(daw * k) */
+            for (int d2=0; d2<hd; d2++) {
+                float s = 0;
+                for (int kp=0; kp<S; kp++)
+                    s += daw[kp] * a->k_save[(size_t)kp*Hkv*hd + (size_t)hkv*hd + d2];
+                d_q[(size_t)m*H*hd + (size_t)h*hd + d2] += s * scale;
+            }
+        }
+    }
+
+    /* Accumulate dW_q, dW_k, dW_v, db_q, db_k, db_v */
+    for (int m=0; m<M; m++) {
+        const float* xm = a->x_save + (size_t)m*D;
+        for (int i=0; i<D; i++) {
+            for (int j=0; j<H*hd; j++)
+                g->dW_q[j*D+i] += xm[i] * d_q[(size_t)m*H*hd+j];
+            for (int j=0; j<Hkv*hd; j++) {
+                g->dW_k[j*D+i] += xm[i] * d_k[(size_t)m*Hkv*hd+j];
+                g->dW_v[j*D+i] += xm[i] * d_v[(size_t)m*Hkv*hd+j];
+            }
+        }
+        for (int j=0; j<H*hd; j++)   g->db_q[j] += d_q[(size_t)m*H*hd+j];
+        for (int j=0; j<Hkv*hd; j++) { g->db_k[j] += d_k[(size_t)m*Hkv*hd+j]; g->db_v[j] += d_v[(size_t)m*Hkv*hd+j]; }
+    }
+
+    /* dx = d_q @ W_q^T + d_k @ W_k^T + d_v @ W_v^T */
+    if (dx) {
+        for (int m=0; m<M; m++) {
+            float* dxm = dx + (size_t)m*D;
+            const float* dqm = d_q + (size_t)m*H*hd;
+            const float* dkm = d_k + (size_t)m*Hkv*hd;
+            const float* dvm = d_v + (size_t)m*Hkv*hd;
+            for (int i=0; i<D; i++) {
+                float s = 0;
+                for (int j=0; j<H*hd; j++)    s += dqm[j] * a->W_q[(size_t)j*D+i];
+                for (int j=0; j<Hkv*hd; j++) { s += dkm[j] * a->W_k[(size_t)j*D+i];
+                                                s += dvm[j] * a->W_v[(size_t)j*D+i]; }
+                dxm[i] = s;
+            }
+        }
+    }
+
+    pn_free(d_attn_out); pn_free(d_attn_w);
+    pn_free(d_q); pn_free(d_k); pn_free(d_v);
 }

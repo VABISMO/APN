@@ -1,0 +1,44 @@
+# Build artifacts
+probnet
+*.o
+*.pnet
+*.so
+*.dylib
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Data/model files
+*.bin
+*.pt
+*.pth
+*.safetensors
+data/
+corpus.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Experiment outputs
+experiments/real_scale_results.json
+*.log
+
+# Virtual environments
+venv/
+.venv/
+env/
