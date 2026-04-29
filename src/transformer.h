@@ -1,5 +1,5 @@
 /*
- * ProbNet - transformer.h
+ * APN - transformer.h
  * Full Transformer (GPT/LLaMA/Gemma style) with APN FFN layers.
  *
  * Architecture per layer:
@@ -27,7 +27,7 @@ typedef struct {
     float rms_eps;
     float apn_tau0;  /* APN tau start (3.0) */
     float apn_tau1;  /* APN tau end   (0.05) */
-    char arch[32];   /* "probnet", "llama", "gemma" */
+    char arch[32];   /* "apn", "llama", "gemma" */
 } TransformerConfig;
 
 static inline TransformerConfig default_config(void) {
@@ -43,7 +43,7 @@ static inline TransformerConfig default_config(void) {
     c.rms_eps     = 1e-5f;
     c.apn_tau0    = 3.0f;
     c.apn_tau1    = 0.05f;
-    snprintf(c.arch, 32, "probnet");
+    snprintf(c.arch, 32, "apn");
     return c;
 }
 
@@ -349,7 +349,7 @@ static inline void transformer_print_info(const Transformer* t) {
     size_t norm = (size_t)c->n_layers*2*c->d_model + c->d_model;
     size_t total= emb + attn + ffn + norm;
     printf("╔══════════════════════════════════════════════════╗\n");
-    printf("║  ProbNet Transformer                             ║\n");
+    printf("║  APN Transformer                             ║\n");
     printf("╠══════════════════════════════════════════════════╣\n");
     printf("║  arch       : %-34s ║\n", c->arch);
     printf("║  vocab      : %-34d ║\n", c->vocab_size);
@@ -365,15 +365,15 @@ static inline void transformer_print_info(const Transformer* t) {
 }
 
 /* ── Weight I/O ─────────────────────────────────────────────────── */
-#define PROBNET_MAGIC 0x504E4554  /* "PNET" */
-#define PROBNET_VERSION 2
+#define APN_MAGIC 0x41504E00  /* "APN\0" */
+#define APN_VERSION 2
 
 static inline int transformer_save(const Transformer* t, const char* path) {
     FILE* fp = fopen(path, "wb");
     if (!fp) { fprintf(stderr,"Cannot open %s for writing\n",path); return -1; }
     const TransformerConfig* c = &t->config;
     /* Header */
-    uint32_t magic=PROBNET_MAGIC, ver=PROBNET_VERSION;
+    uint32_t magic=APN_MAGIC, ver=APN_VERSION;
     fwrite(&magic, 4, 1, fp);
     fwrite(&ver,   4, 1, fp);
     fwrite(c, sizeof(TransformerConfig), 1, fp);
@@ -409,8 +409,8 @@ static inline Transformer* transformer_load(const char* path) {
     uint32_t magic, ver;
     fread(&magic, 4, 1, fp);
     fread(&ver,   4, 1, fp);
-    if (magic != PROBNET_MAGIC) {
-        fprintf(stderr,"Not a ProbNet file (magic=%08X)\n",magic); fclose(fp); return NULL;
+    if (magic != APN_MAGIC) {
+        fprintf(stderr,"Not a APN file (magic=%08X)\n",magic); fclose(fp); return NULL;
     }
     TransformerConfig c;
     fread(&c, sizeof(TransformerConfig), 1, fp);

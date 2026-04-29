@@ -1,5 +1,5 @@
 /*
- * ProbNet - tensor.h
+ * APN - tensor.h
  * Core tensor operations: AVX-512 matmul, LayerNorm, Softmax, RMSNorm
  * CPU-only (GPU path via CUDA backend if available)
  *
@@ -27,7 +27,7 @@ static inline float* pn_alloc(size_t n) {
     if (n == 0) return NULL;
     void* p = NULL;
     if (posix_memalign(&p, 64, n * sizeof(float)) != 0) {
-        fprintf(stderr, "[ProbNet] OOM: %zu floats (%zu MB)\n", n, n*4/1048576);
+        fprintf(stderr, "[APN] OOM: %zu floats (%zu MB)\n", n, n*4/1048576);
         exit(1);
     }
     memset(p, 0, n * sizeof(float));

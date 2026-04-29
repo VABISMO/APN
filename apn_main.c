@@ -1,23 +1,23 @@
 /*
- * probnet_main.c — ProbNet CLI
+ * apn_main.c — APN CLI
  *
  * Commands:
- *   ./probnet train   --data corpus.txt --out model.pnet [options]
- *   ./probnet generate --model model.pnet --prompt "Hello" [options]
- *   ./probnet chat    --model model.pnet
- *   ./probnet convert --input llama.bin --out model.pnet --format llama
- *   ./probnet bench   --model model.pnet [--vs swiglu]
- *   ./probnet info    --model model.pnet
+ *   ./apn train   --data corpus.txt --out model.apn [options]
+ *   ./apn generate --model model.apn --prompt "Hello" [options]
+ *   ./apn chat    --model model.apn
+ *   ./apn convert --input llama.bin --out model.apn --format llama
+ *   ./apn bench   --model model.apn [--vs swiglu]
+ *   ./apn info    --model model.apn
  *
  * Compile:
  *   # With AVX-512 (if CPU supports it):
  *   gcc -O3 -mavx512f -mavx512dq -mavx512bw -mfma \
  *       -ffast-math -funroll-loops -fopenmp \
- *       -o probnet probnet_main.c -lm
+ *       -o apn apn_main.c -lm
  *
  *   # Without AVX-512 (auto-detected fallback):
  *   gcc -O3 -march=native -mfma -ffast-math -funroll-loops -fopenmp \
- *       -o probnet probnet_main.c -lm
+ *       -o apn apn_main.c -lm
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -27,7 +27,7 @@
 #include <time.h>
 #include <getopt.h>
 
-/* Include all ProbNet modules */
+/* Include all APN modules */
 #include "src/tensor.h"
 #include "src/optimizer.h"
 #include "src/apn_layer.h"
@@ -62,7 +62,7 @@ static void normalize_v(float* y,int n){double mn=0,sd=0;for(int i=0;i<n;i++)mn+
 
 static void cmd_bench(void) {
     printf("\n╔══════════════════════════════════════════════════════════════════╗\n");
-    printf(  "║  ProbNet Benchmark: APN v9 vs SwiGLU vs Linear                  ║\n");
+    printf(  "║  APN Benchmark: APN v9 vs SwiGLU vs Linear                  ║\n");
     printf(  "║  7 regression tasks × 3 seeds  |  D=16  H=64  N=800  E=600      ║\n");
     printf(  "╚══════════════════════════════════════════════════════════════════╝\n\n");
     fflush(stdout);
@@ -176,7 +176,7 @@ static void cmd_train_scratch(const char* data_path, const char* out_path,
                                int ffn_hidden, int batch_size, int seq_len,
                                int epochs, float lr) {
     printf("\n╔══════════════════════════════════════════════════════════════════╗\n");
-    printf(  "║  ProbNet Training from Scratch                                   ║\n");
+    printf(  "║  APN Training from Scratch                                   ║\n");
     printf(  "╚══════════════════════════════════════════════════════════════════╝\n\n");
 
     /* Build char tokenizer */
@@ -202,7 +202,7 @@ static void cmd_train_scratch(const char* data_path, const char* out_path,
     cfg.n_heads=n_heads; cfg.n_kv_heads=n_heads;
     cfg.ffn_hidden=ffn_hidden;
     cfg.max_seq_len=seq_len*2;
-    snprintf(cfg.arch,32,"probnet-scratch");
+    snprintf(cfg.arch,32,"apn-scratch");
 
     Transformer* model=transformer_new(&cfg);
     transformer_print_info(model);
@@ -248,7 +248,7 @@ static void cmd_train_scratch(const char* data_path, const char* out_path,
 
 /* ── Print usage ────────────────────────────────────────────────── */
 static void usage(const char* prog) {
-    printf("\nProbNet v9 — Adaptive Probabilistic Neuron Transformer\n");
+    printf("\nAPN v9 — Adaptive Probabilistic Neuron Transformer\n");
     printf("─────────────────────────────────────────────────────\n");
     printf("Usage: %s <command> [options]\n\n", prog);
     printf("Commands:\n");
@@ -260,7 +260,7 @@ static void usage(const char* prog) {
     printf("  info               Show model architecture info\n\n");
     printf("Train options:\n");
     printf("  --data <path>      Training corpus (text file)\n");
-    printf("  --out  <path>      Output model file (.pnet)\n");
+    printf("  --out  <path>      Output model file (.apn)\n");
     printf("  --d_model <int>    Model dimension (default: 512)\n");
     printf("  --n_layers <int>   Number of layers (default: 6)\n");
     printf("  --n_heads <int>    Attention heads (default: 8)\n");
@@ -269,7 +269,7 @@ static void usage(const char* prog) {
     printf("  --seq_len <int>    Context length (default: 256)\n");
     printf("  --lr <float>       Learning rate (default: 3e-4)\n\n");
     printf("Generate options:\n");
-    printf("  --model <path>     Model file (.pnet)\n");
+    printf("  --model <path>     Model file (.apn)\n");
     printf("  --vocab <path>     Vocabulary file\n");
     printf("  --prompt <text>    Input prompt\n");
     printf("  --max_tokens <int> Max new tokens (default: 200)\n");
@@ -278,17 +278,17 @@ static void usage(const char* prog) {
     printf("  --top_p <float>    Top-p nucleus (default: 0.95)\n\n");
     printf("Examples:\n");
     printf("  %s bench\n", prog);
-    printf("  %s train --data corpus.txt --out mymodel.pnet --d_model 256 --n_layers 4\n", prog);
-    printf("  %s train_bpe --data corpus.txt --vocab vocab.txt --out mymodel.pnet\n", prog);
-    printf("  %s generate --model mymodel.pnet --prompt \"Once upon\" --max_tokens 100\n", prog);
-    printf("  %s chat --model mymodel.pnet\n", prog);
-    printf("  %s info --model mymodel.pnet\n\n", prog);
+    printf("  %s train --data corpus.txt --out mymodel.apn --d_model 256 --n_layers 4\n", prog);
+    printf("  %s train_bpe --data corpus.txt --vocab vocab.txt --out mymodel.apn\n", prog);
+    printf("  %s generate --model mymodel.apn --prompt \"Once upon\" --max_tokens 100\n", prog);
+    printf("  %s chat --model mymodel.apn\n", prog);
+    printf("  %s info --model mymodel.apn\n\n", prog);
 }
 
 /* ── main ───────────────────────────────────────────────────────── */
 int main(int argc, char** argv) {
     printf("\n╔══════════════════════════════════════════════════════════════════╗\n");
-    printf(  "║  ProbNet v9  —  Adaptive Probabilistic Neuron Transformer        ║\n");
+    printf(  "║  APN v9  —  Adaptive Probabilistic Neuron Transformer        ║\n");
     printf(  "║  CPU: AVX-512 + OpenMP  |  Threads: %2d                           ║\n",
              omp_get_max_threads());
     printf(  "╚══════════════════════════════════════════════════════════════════╝\n");
@@ -305,7 +305,7 @@ int main(int argc, char** argv) {
 
     /* ── train ── */
     if (strcmp(cmd,"train")==0) {
-        const char* data="corpus.txt", *out="model.pnet";
+        const char* data="corpus.txt", *out="model.apn";
         int d_model=256,n_layers=4,n_heads=8,ffn_hidden=1024;
         int batch=16,seq_len=128,epochs=10;
         float lr=3e-4f;
@@ -327,7 +327,7 @@ int main(int argc, char** argv) {
 
     /* ── train_bpe ── */
     if (strcmp(cmd,"train_bpe")==0) {
-        const char* data="corpus.txt", *out="model.pnet", *vocab="vocab.txt";
+        const char* data="corpus.txt", *out="model.apn", *vocab="vocab.txt";
         int d_model=256,n_layers=4,n_heads=8,ffn_hidden=1024;
         int batch=16,seq_len=128,epochs=10,target_vocab=8000;
         float lr=3e-4f;

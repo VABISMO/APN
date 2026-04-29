@@ -1,4 +1,4 @@
-# ProbNet v9 — Python requirements
+# APN v9 — Python requirements
 # Install: pip install -r requirements.txt
 
 # Required for HuggingFace model loading + GPU training

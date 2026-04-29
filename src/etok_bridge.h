@@ -1,6 +1,6 @@
 /*
- * ProbNet - etok_bridge.h
- * Bridge between ETOK BPE tokenizer and ProbNet Transformer.
+ * APN - etok_bridge.h
+ * Bridge between ETOK BPE tokenizer and APN Transformer.
  * Enables training and generation with proper BPE tokenization.
  *
  * Usage: #include "etok_bridge.h" after including transformer.h
@@ -12,7 +12,7 @@
 
 /* ── ETOK Tokenizer Bridge ────────────────────────────────────────── */
 /*
- * Loads an ETOK-trained vocabulary and builds a ProbNet Tokenizer
+ * Loads an ETOK-trained vocabulary and builds a APN Tokenizer
  * that can be used with transformer_forward/generate.
  *
  * The ETOK vocab file format is one token per line: "token<TAB>score"
@@ -158,7 +158,7 @@ static inline char* etok_train_vocab(const char* corpus_path,
 
 /*
  * Train a BPE tokenizer on a corpus, build a Transformer, and train.
- * This is the main entry point for training a ProbNet model from scratch
+ * This is the main entry point for training a APN model from scratch
  * with proper BPE tokenization.
  */
 static inline void train_with_bpe(const char* corpus_path,
@@ -196,7 +196,7 @@ static inline void train_with_bpe(const char* corpus_path,
     cfg.n_kv_heads = n_heads;
     cfg.ffn_hidden = ffn_hidden;
     cfg.max_seq_len = seq_len * 2;
-    snprintf(cfg.arch, 32, "probnet-bpe");
+    snprintf(cfg.arch, 32, "apn-bpe");
 
     Transformer* model = transformer_new(&cfg);
     transformer_print_info(model);

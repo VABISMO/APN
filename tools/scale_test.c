@@ -1,5 +1,5 @@
 /*
- * scale_test.c — ProbNet Standalone Regression + LM Benchmark
+ * scale_test.c — APN Standalone Regression + LM Benchmark
  *
  * This is the benchmark that validated APN v9 beats SwiGLU 5/7 tasks.
  * Run standalone (no other files needed except src/):
@@ -119,7 +119,7 @@ static void normalize_v(float*y,int n){
 /* ── Main benchmark ───────────────────────────────────────────── */
 int main(void) {
     printf("\n╔══════════════════════════════════════════════════════════════════╗\n");
-    printf(  "║  ProbNet Scale Test  —  APN v9 vs SwiGLU vs Linear              ║\n");
+    printf(  "║  APN Scale Test  —  APN v9 vs SwiGLU vs Linear              ║\n");
     printf(  "║  7 regression tasks × 3 seeds  |  D=16 H=64 N=800 E=600        ║\n");
     printf(  "║  OpenMP threads: %-3d                                            ║\n",
              omp_get_max_threads());

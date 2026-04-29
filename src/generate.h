@@ -1,5 +1,5 @@
 /*
- * ProbNet - generate.h
+ * APN - generate.h
  * Text generation: greedy, top-k, top-p (nucleus), beam search, temperature.
  * Uses KV cache for O(1) per-token generation after prefill.
  */
@@ -182,7 +182,7 @@ static inline char* generate_text(Transformer* model, Tokenizer* tok,
 static inline void chat_loop(Transformer* model, Tokenizer* tok,
                                const GenerateConfig* cfg) {
     printf("\n╔═══════════════════════════════════════════╗\n");
-    printf("║  ProbNet Interactive Chat                 ║\n");
+    printf("║  APN Interactive Chat                 ║\n");
     printf("║  Type your message. 'quit' to exit.       ║\n");
     printf("╚═══════════════════════════════════════════╝\n\n");
 

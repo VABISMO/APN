@@ -1,5 +1,5 @@
 /*
- * ProbNet - train.h
+ * APN - train.h
  * Language model training loop.
  * Features:
  *   - Cross-entropy loss with gradient accumulation
@@ -43,7 +43,7 @@ static inline TrainConfig train_default(void) {
     c.eval_every      = 500;
     c.save_every      = 1000;
     c.grad_accum      = 1;
-    strncpy(c.checkpoint_path, "checkpoint.pnet", 255);
+    strncpy(c.checkpoint_path, "checkpoint.apn", 255);
     strncpy(c.data_path, "data/train.txt", 255);
     return c;
 }

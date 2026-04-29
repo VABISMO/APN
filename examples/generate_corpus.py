@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-generate_corpus.py - Generate example training corpus for ProbNet
+generate_corpus.py - Generate example training corpus for APN
 
 Usage:
     python3 examples/generate_corpus.py --out corpus.txt --size medium
@@ -112,8 +112,8 @@ def main():
     print(f"  Chars  : {len(text):,}")
     print(f"  Type   : {args.type}  |  Size: {args.size}")
     print(f"\nUse with:")
-    print(f"  ./probnet train --data {args.out} --out model.pnet --d_model 256 --n_layers 4")
-    print(f"  python3 probnet_complete.py train --model google/gemma-3-2b-it --data {args.out}")
+    print(f"  ./apn train --data {args.out} --out model.apn --d_model 256 --n_layers 4")
+    print(f"  python3 apn_complete.py train --model google/gemma-3-2b-it --data {args.out}")
 
 if __name__ == "__main__":
     main()

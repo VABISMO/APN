@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-ProbNet - convert_hf.py
+APN - convert_hf.py
 ======================
-Converts HuggingFace LLaMA/Gemma models to ProbNet format.
+Converts HuggingFace LLaMA/Gemma models to APN format.
 
 Usage:
-    python3 convert_hf.py --model meta-llama/Llama-2-7b-hf --out llama2_probnet.pnet
-    python3 convert_hf.py --model google/gemma-2b --out gemma2b_probnet.pnet
-    python3 convert_hf.py --model ./local_model_dir --out model.pnet
+    python3 convert_hf.py --model meta-llama/Llama-2-7b-hf --out llama2_apn.apn
+    python3 convert_hf.py --model google/gemma-2b --out gemma2b_apn.apn
+    python3 convert_hf.py --model ./local_model_dir --out model.apn
 
 What this script does:
     1. Loads the HF model (safetensors or pytorch_model.bin)
@@ -16,8 +16,8 @@ What this script does:
        - The SwiGLU W_gate/W_up become APN W1/W2
        - APN logits initialized so identity+product dominate (matches SwiGLU)
        - W_down becomes W_out
-    4. Saves vocabulary in ProbNet format
-    5. Writes .pnet binary file
+    4. Saves vocabulary in APN format
+    5. Writes .apn binary file
 
 Requirements:
     pip install torch transformers sentencepiece
@@ -74,7 +74,7 @@ def load_hf_model(model_name_or_path):
     return config, model, tok
 
 def save_vocab(hf_tokenizer, out_path):
-    """Save vocabulary in ProbNet format (one token per line)."""
+    """Save vocabulary in APN format (one token per line)."""
     vocab = hf_tokenizer.get_vocab()
     # Sort by id
     sorted_vocab = sorted(vocab.items(), key=lambda x: x[1])
@@ -114,11 +114,11 @@ def init_apn_logits(hidden, n_funcs=6, identity_bias=1.0, prod_bias=0.5):
     return logits
 
 def convert_llama(config, model, out_path, vocab_size):
-    """Convert LLaMA-style model (SwiGLU FFN) to ProbNet."""
+    """Convert LLaMA-style model (SwiGLU FFN) to APN."""
     import torch
     state = model.state_dict()
 
-    MAGIC = 0x504E4554  # "PNET"
+    MAGIC = 0x41504E00  # "APN"
     VERSION = 2
     ARCH = b"llama-apn\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 
@@ -134,7 +134,7 @@ def convert_llama(config, model, out_path, vocab_size):
     rms_eps = getattr(config, 'rms_norm_eps', 1e-5)
     vocab   = vocab_size
 
-    print(f"\nConverting to ProbNet format:")
+    print(f"\nConverting to APN format:")
     print(f"  D={D}  L={L}  H={H}  Hkv={Hkv}  hd={hd}")
     print(f"  FFN: {Fi}→{Fh}→{Fo} (SwiGLU → APN)")
     print(f"  Vocab: {vocab}")
@@ -237,7 +237,7 @@ def convert_llama(config, model, out_path, vocab_size):
     print(f"\n  Saved {out_path} ({size_mb:.1f} MB)")
 
 def convert_gemma(config, model, out_path, vocab_size):
-    """Convert Gemma-style model to ProbNet."""
+    """Convert Gemma-style model to APN."""
     # Gemma uses same architecture as LLaMA, just different key names
     import torch
     state = model.state_dict()
@@ -251,9 +251,9 @@ def convert_gemma(config, model, out_path, vocab_size):
     convert_llama(config, model, out_path, vocab_size)
 
 def main():
-    parser = argparse.ArgumentParser(description='Convert HuggingFace model to ProbNet')
+    parser = argparse.ArgumentParser(description='Convert HuggingFace model to APN')
     parser.add_argument('--model',  required=True,  help='HF model name or local path')
-    parser.add_argument('--out',    required=True,  help='Output .pnet file')
+    parser.add_argument('--out',    required=True,  help='Output .apn file')
     parser.add_argument('--vocab',  default=None,   help='Output vocabulary file (default: <out>.vocab)')
     parser.add_argument('--format', default='auto', choices=['auto','llama','gemma'],
                         help='Model format (default: auto-detect)')
@@ -269,7 +269,7 @@ def main():
     config, model, hf_tok = load_hf_model(args.model)
 
     # Save vocabulary
-    vocab_out = args.vocab or args.out.replace('.pnet','') + '.vocab'
+    vocab_out = args.vocab or args.out.replace('.apn','') + '.vocab'
     vocab_size = save_vocab(hf_tok, vocab_out)
 
     # Detect architecture
@@ -300,8 +300,8 @@ def main():
     print(f"  Model: {args.out}")
     print(f"  Vocab: {vocab_out}")
     print(f"\nTo use:")
-    print(f"  ./probnet generate --model {args.out} --vocab {vocab_out} --prompt 'Hello'")
-    print(f"  ./probnet chat     --model {args.out} --vocab {vocab_out}")
+    print(f"  ./apn generate --model {args.out} --vocab {vocab_out} --prompt 'Hello'")
+    print(f"  ./apn chat     --model {args.out} --vocab {vocab_out}")
     print(f"\nTo fine-tune the APN layers:")
     print(f"  python3 python/train.py --model {args.out} --data data.txt --epochs 3")
 

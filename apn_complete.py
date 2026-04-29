@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ProbNet Complete - Adaptive Probabilistic Neuron LLM System
+APN Complete - Adaptive Probabilistic Neuron LLM System
 
 FEATURES:
   Load ANY HuggingFace model (Gemma3, LLaMA3, Mistral, Phi, Qwen...)
@@ -14,13 +14,13 @@ FEATURES:
   GPU: automatic CUDA/MPS detection
 
 USAGE:
-  python3 probnet_complete.py demo
-  python3 probnet_complete.py generate  --model google/gemma-3-2b-it
-  python3 probnet_complete.py generate  --model meta-llama/Llama-3.2-3B
-  python3 probnet_complete.py chat      --model google/gemma-3-2b-it
-  python3 probnet_complete.py convert   --model google/gemma-3-2b-it --out gemma3_apn
-  python3 probnet_complete.py benchmark --model google/gemma-3-2b-it
-  python3 probnet_complete.py train     --model google/gemma-3-2b-it --data corpus.txt
+  python3 apn_complete.py demo
+  python3 apn_complete.py generate  --model google/gemma-3-2b-it
+  python3 apn_complete.py generate  --model meta-llama/Llama-3.2-3B
+  python3 apn_complete.py chat      --model google/gemma-3-2b-it
+  python3 apn_complete.py convert   --model google/gemma-3-2b-it --out gemma3_apn
+  python3 apn_complete.py benchmark --model google/gemma-3-2b-it
+  python3 apn_complete.py train     --model google/gemma-3-2b-it --data corpus.txt
 
 REQUIREMENTS (for HuggingFace models):
   pip install torch transformers accelerate safetensors sentencepiece
@@ -53,7 +53,7 @@ def require_torch():
     if not HAS_TORCH:
         print("\nERROR: PyTorch not installed.")
         print("Install with:  pip install torch transformers accelerate safetensors sentencepiece")
-        print("\nOr run the demo (no dependencies):  python3 probnet_complete.py demo")
+        print("\nOr run the demo (no dependencies):  python3 apn_complete.py demo")
         sys.exit(1)
 
 # ─── Device detection ────────────────────────────────────────────────────────
@@ -61,17 +61,17 @@ def require_torch():
 def get_device(force_cpu=False):
     require_torch()
     if force_cpu:
-        print(f"[ProbNet] CPU mode (forced)  ({torch.get_num_threads()} threads)")
+        print(f"[APN] CPU mode (forced)  ({torch.get_num_threads()} threads)")
         return torch.device("cpu")
     if torch.cuda.is_available():
         dev = torch.device("cuda")
         props = torch.cuda.get_device_properties(0)
-        print(f"[ProbNet] GPU: {props.name}  VRAM: {props.total_memory//1073741824}GB")
+        print(f"[APN] GPU: {props.name}  VRAM: {props.total_memory//1073741824}GB")
         return dev
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        print("[ProbNet] GPU: Apple MPS (Metal)")
+        print("[APN] GPU: Apple MPS (Metal)")
         return torch.device("mps")
-    print(f"[ProbNet] CPU mode  ({torch.get_num_threads()} threads)")
+    print(f"[APN] CPU mode  ({torch.get_num_threads()} threads)")
     return torch.device("cpu")
 
 # ─── APN Core (works with torch OR numpy) ────────────────────────────────────
@@ -171,52 +171,92 @@ if HAS_TORCH:
         def specialization(self):
             return self.apn.specialization()
 
+        @staticmethod
+        def _get_dims(proj):
+            """Extract (in_features, out_features) from nn.Linear or Conv1D."""
+            if hasattr(proj, 'in_features'):
+                return proj.in_features, proj.out_features
+            # GPT-2 Conv1D: weight is [in, out], nx=in, nf=out
+            if hasattr(proj, 'nf'):
+                return proj.nx, proj.nf
+            raise ValueError(f"Cannot extract dims from {type(proj).__name__}")
+
+        @staticmethod
+        def _get_weight(proj):
+            """Get weight as [out, in] regardless of Linear or Conv1D."""
+            w = proj.weight
+            # Conv1D stores weight as [in, out], Linear as [out, in]
+            if hasattr(proj, 'nf') and not hasattr(proj, 'in_features'):
+                return w.t().contiguous()  # Transpose Conv1D weight
+            return w
+
+        @staticmethod
+        def _get_bias(proj, size):
+            """Get bias tensor, defaulting to zeros."""
+            if proj.bias is not None:
+                return proj.bias
+            return torch.zeros(size)
+
         @classmethod
         def from_swiglu(cls, gate_proj, up_proj, down_proj, tau=2.0):
             """
             Convert SwiGLU weights to APN.
-            W1 <- gate_proj, W2 <- up_proj, W_out <- down_proj.
-            APN logits init: identity+relu dominant = approximates SwiGLU.
+            W1 <- gate_proj, W2 <- up_proj, W_out <- down_proj * scale.
+            Scale compensates for APN vs SwiGLU output magnitude difference.
             Model generates correctly immediately, specializes during fine-tune.
             """
-            in_dim  = gate_proj.in_features
-            hidden  = gate_proj.out_features
-            out_dim = down_proj.out_features
+            in_dim  = cls._get_dims(gate_proj)[0]
+            hidden  = cls._get_dims(gate_proj)[1]
+            out_dim = cls._get_dims(down_proj)[1]
             layer   = cls(in_dim, hidden, out_dim, tau=tau)
             with torch.no_grad():
-                layer.W1.weight.copy_(gate_proj.weight)
-                layer.W1.bias.copy_(gate_proj.bias if gate_proj.bias is not None
-                                    else torch.zeros(hidden))
-                layer.W2.weight.copy_(up_proj.weight)
-                layer.W2.bias.copy_(up_proj.bias if up_proj.bias is not None
-                                    else torch.zeros(hidden))
-                layer.W_out.weight.copy_(down_proj.weight)
-                layer.W_out.bias.copy_(down_proj.bias if down_proj.bias is not None
-                                       else torch.zeros(out_dim))
-                # Init logits: identity+relu high → approximates SwiGLU
+                layer.W1.weight.copy_(cls._get_weight(gate_proj))
+                layer.W1.bias.copy_(cls._get_bias(gate_proj, hidden))
+                layer.W2.weight.copy_(cls._get_weight(up_proj))
+                layer.W2.bias.copy_(cls._get_bias(up_proj, hidden))
+                # Copy W_out without scaling — model should work immediately
+                layer.W_out.weight.copy_(cls._get_weight(down_proj))
+                layer.W_out.bias.copy_(cls._get_bias(down_proj, out_dim))
+                # Init logits: identity+relu+ b-prod dominant
                 logits = torch.zeros(hidden, 6)
-                logits[:, 0] = 2.0   # identity (linear component)
-                logits[:, 5] = 1.5   # relu (activation gate)
-                logits[:, 3] = 1.0   # b-prod (multiplicative interaction)
-                logits += torch.randn_like(logits) * 0.05
+                logits[:, 0] = 8.0   # identity — very dominant
+                logits[:, 5] = 4.0   # relu — secondary
+                logits[:, 3] = 2.0   # b-prod — multiplicative (SwiGLU has product)
+                logits[:, 1] = -4.0  # sq-tanh — suppressed
+                logits[:, 2] = -4.0  # s-sqrt — suppressed
+                logits[:, 4] = -4.0  # sin — suppressed
+                logits += torch.randn_like(logits) * 0.1
                 layer.apn.logits.copy_(logits)
             return layer
 
         @classmethod
         def from_gelu(cls, fc1, fc2, tau=2.0):
-            """Convert GELU FFN (GPT-2 style) to APN."""
-            in_dim  = fc1.in_features
-            hidden  = fc1.out_features
-            out_dim = fc2.out_features
+            """Convert GELU FFN (GPT-2 style) to APN.
+            W1 = c_fc, W2 = c_fc (duplicate), W_out = c_proj * scale.
+            Scale compensates for APN vs GELU output magnitude difference.
+            """
+            in_dim  = cls._get_dims(fc1)[0]
+            hidden  = cls._get_dims(fc1)[1]
+            out_dim = cls._get_dims(fc2)[1]
             layer   = cls(in_dim, hidden, out_dim, tau=tau)
             with torch.no_grad():
-                layer.W1.weight.copy_(fc1.weight)
-                if fc1.bias is not None: layer.W1.bias.copy_(fc1.bias)
-                layer.W_out.weight.copy_(fc2.weight)
-                if fc2.bias is not None: layer.W_out.bias.copy_(fc2.bias)
+                layer.W1.weight.copy_(cls._get_weight(fc1))
+                layer.W1.bias.copy_(cls._get_bias(fc1, hidden))
+                # W2 = copy of c_fc so p2 ≈ p1 (needed for b-prod function)
+                layer.W2.weight.copy_(cls._get_weight(fc1))
+                layer.W2.bias.copy_(cls._get_bias(fc1, hidden))
+                # Copy W_out without scaling — model should work immediately
+                layer.W_out.weight.copy_(cls._get_weight(fc2))
+                layer.W_out.bias.copy_(cls._get_bias(fc2, out_dim))
+                # Init logits: identity+relu dominant, others very negative
                 logits = torch.zeros(hidden, 6)
-                logits[:, 0] = 2.0; logits[:, 5] = 1.0
-                logits += torch.randn_like(logits) * 0.05
+                logits[:, 0] = 8.0   # identity — very dominant
+                logits[:, 5] = 4.0   # relu — secondary
+                logits[:, 1] = -4.0  # sq-tanh — suppressed
+                logits[:, 2] = -4.0  # s-sqrt — suppressed
+                logits[:, 3] = -4.0  # b-prod — suppressed
+                logits[:, 4] = -4.0  # sin — suppressed
+                logits += torch.randn_like(logits) * 0.1
                 layer.apn.logits.copy_(logits)
             return layer
 
@@ -233,7 +273,7 @@ if HAS_TORCH:
 
 # ─── Converter ───────────────────────────────────────────────────────────────
 
-    class ProbNetConverter:
+    class APNConverter:
         """
         Converts any HuggingFace LLM to use APN FFN layers.
         Supports: LLaMA 2/3, Gemma 2/3, Mistral, Phi, Qwen, Falcon, GPT-2...
@@ -262,6 +302,7 @@ if HAS_TORCH:
             self.tau_init  = tau_init
             self.arch      = type(model).__name__
             self.n_converted = 0
+            self._model_name = getattr(model.config, '_name_or_path', '') or getattr(tokenizer, 'name_or_path', '')
 
         def _detect(self):
             arch = self.arch
@@ -334,6 +375,9 @@ if HAS_TORCH:
                         down = getattr(mlp, down_name)
                         apn  = APNLayer.from_swiglu(gate, up, down, self.tau_init)
                     elif ffn_type == "gelu":
+                        if i == 0 and verbose:
+                            print("  Note: GELU conversion uses APN relu approximation.")
+                            print("  Fine-tuning recommended for best quality on GELU models.")
                         fc1 = getattr(mlp, gate_name)
                         fc2 = getattr(mlp, down_name)
                         apn = APNLayer.from_gelu(fc1, fc2, self.tau_init)
@@ -357,6 +401,47 @@ if HAS_TORCH:
 
             return self.model
 
+        def calibrate(self, n_samples=3, verbose=True):
+            """Scale lm_head to match original logit magnitude after conversion.
+            Compares original and APN logits on a short prompt, computes
+            the logit magnitude ratio, and scales lm_head accordingly."""
+            if not HAS_TRANSFORMERS:
+                if verbose: print("  Skipping calibration (no transformers)")
+                return
+            try:
+                from transformers import AutoModelForCausalLM
+                model_name = self._model_name or 'gpt2'
+                orig = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=next(self.model.parameters()).dtype,
+                    low_cpu_mem_usage=True).to(self.device)
+                orig.eval()
+                prompt = "The future of artificial intelligence"
+                ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+                with torch.no_grad():
+                    orig_logits = orig(ids).logits[0, -1]
+                    apn_logits = self.model(ids).logits[0, -1]
+                orig_scale = orig_logits.std()
+                apn_scale = apn_logits.std()
+                ratio = (orig_scale / apn_scale).item()
+                if verbose:
+                    print(f"  Calibrating logit scale: orig={orig_scale:.1f} apn={apn_scale:.1f} ratio={ratio:.3f}")
+                # Scale lm_head weights if not tied
+                if hasattr(self.model, 'lm_head') and not getattr(self.model.config, 'tie_word_embeddings', True):
+                    with torch.no_grad():
+                        self.model.lm_head.weight.data *= ratio
+                        if self.model.lm_head.bias is not None:
+                            self.model.lm_head.bias.data *= ratio
+                    if verbose: print(f"  Scaled lm_head by {ratio:.3f}")
+                else:
+                    if verbose:
+                        print(f"  Tied embeddings — recommend --temperature {1/ratio:.2f} for generation")
+                        self._rec_temp = 1.0 / ratio
+                del orig
+                if torch.cuda.is_available(): torch.cuda.empty_cache()
+            except Exception as e:
+                if verbose: print(f"  Calibration skipped: {e}")
+
         def anneal_all(self, progress, tau0=2.0, tau1=0.05):
             for m in self.model.modules():
                 if isinstance(m, APNLayer):
@@ -376,7 +461,7 @@ if HAS_TORCH:
 
 # ─── Generator ───────────────────────────────────────────────────────────────
 
-    class ProbNetGenerator:
+    class APNGenerator:
         """Full text generation — works identically to model.generate()."""
 
         def __init__(self, model, tokenizer, device):
@@ -460,7 +545,7 @@ if HAS_TORCH:
 
 # ─── Chat ────────────────────────────────────────────────────────────────────
 
-    class ProbNetChat:
+    class APNChat:
         DEFAULT_SYSTEM = "You are a helpful, harmless, and honest AI assistant."
 
         def __init__(self, generator, system_prompt=None):
@@ -489,7 +574,7 @@ if HAS_TORCH:
 
         def run(self, temperature=0.7, max_new_tokens=512):
             print("\n" + "="*60)
-            print("  ProbNet Chat  (commands: /reset  /spec  /quit)")
+            print("  APN Chat  (commands: /reset  /spec  /quit)")
             print("="*60 + "\n")
             while True:
                 try:
@@ -522,7 +607,7 @@ if HAS_TORCH:
 
 # ─── Benchmark ───────────────────────────────────────────────────────────────
 
-    class ProbNetBenchmark:
+    class APNBenchmark:
         REASONING = [
             ("The capital of France is",         "Paris"),
             ("2 + 2 =",                          "4"),
@@ -566,7 +651,7 @@ if HAS_TORCH:
 
         def reasoning(self, model):
             model.eval()
-            gen = ProbNetGenerator(model, self.tok, self.dev)
+            gen = APNGenerator(model, self.tok, self.dev)
             correct = 0
             details = []
             for prompt, expected in self.REASONING:
@@ -586,7 +671,7 @@ if HAS_TORCH:
                 "Python is a popular programming language.",
             ]
             print("\n" + "="*70)
-            print("  ProbNet Benchmark: Original vs APN-converted model")
+            print("  APN Benchmark: Original vs APN-converted model")
             print("="*70)
 
             print("\n  [1/3] Perplexity (lower = better)...")
@@ -622,7 +707,7 @@ if HAS_TORCH:
 
 # ─── Trainer ─────────────────────────────────────────────────────────────────
 
-    class ProbNetTrainer:
+    class APNTrainer:
         """Fine-tune APN layers on your data (CPU or GPU)."""
 
         def __init__(self, model, tokenizer, device, lr=2e-4, weight_decay=0.01):
@@ -693,10 +778,10 @@ if HAS_TORCH:
         model.save_pretrained(p)
         tokenizer.save_pretrained(p)
         apn_layers = [m for m in model.modules() if isinstance(m, APNLayer)]
-        meta = {"probnet_version":9, "n_apn_layers":len(apn_layers),
+        meta = {"apn_version":9, "n_apn_layers":len(apn_layers),
                 "apn_funcs": APNFunction.NAMES,
                 "tau": [m.apn.tau for m in apn_layers[:4]]}
-        with open(p/"probnet_meta.json","w") as f:
+        with open(p/"apn_meta.json","w") as f:
             json.dump(meta, f, indent=2)
         sz = sum(f.stat().st_size for f in p.rglob('*') if f.is_file())/1e6
         print(f"  Saved → {path}/  ({sz:.0f}MB)")
@@ -722,6 +807,18 @@ if HAS_TORCH:
         model.eval()
         n = sum(p.numel() for p in model.parameters())
         print(f"  Loaded: {n/1e9:.2f}B params  [{type(model).__name__}]")
+
+        # Auto-detect previously converted APN model and re-apply conversion
+        meta_path = Path(name) / "apn_meta.json"
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+            if meta.get("apn_version"):
+                print(f"  Detected APN-converted model (v{meta['apn_version']}, "
+                      f"{meta.get('n_apn_layers',0)} layers) — re-applying conversion...")
+                conv = APNConverter(model, tok, device, tau_init=meta.get("tau",[2.0])[0])
+                model = conv.convert("all", verbose=True)
+
         return model, tok
 
 
@@ -737,7 +834,7 @@ class _NullCtx:
 def run_demo(device=None):
     """Complete demo with numpy-only APN (no torch/HF needed)."""
     print("\n" + "="*70)
-    print("  ProbNet Complete — Demo Mode")
+    print("  APN Complete — Demo Mode")
     print("  (Pure numpy APN + PyTorch if available)")
     print("="*70)
 
@@ -847,8 +944,8 @@ def run_demo_numpy():
 
     print(f"\n  To use with real LLMs:")
     print(f"    pip install torch transformers accelerate safetensors sentencepiece")
-    print(f"    python3 probnet_complete.py generate --model google/gemma-3-2b-it")
-    print(f"    python3 probnet_complete.py chat     --model meta-llama/Llama-3.2-3B")
+    print(f"    python3 apn_complete.py generate --model google/gemma-3-2b-it")
+    print(f"    python3 apn_complete.py chat     --model meta-llama/Llama-3.2-3B")
 
 
 def run_demo_torch(device):
@@ -961,17 +1058,17 @@ def run_demo_torch(device):
 
     print("\n  Demo complete ✓")
     print("\n  With a real model:")
-    print("    python3 probnet_complete.py generate  --model google/gemma-3-2b-it --prompt 'Hello'")
-    print("    python3 probnet_complete.py chat      --model meta-llama/Llama-3.2-3B")
-    print("    python3 probnet_complete.py convert   --model google/gemma-3-2b-it --out gemma3_apn")
-    print("    python3 probnet_complete.py benchmark --model google/gemma-3-2b-it")
-    print("    python3 probnet_complete.py train     --model google/gemma-3-2b-it --data data.txt")
+    print("    python3 apn_complete.py generate  --model google/gemma-3-2b-it --prompt 'Hello'")
+    print("    python3 apn_complete.py chat      --model meta-llama/Llama-3.2-3B")
+    print("    python3 apn_complete.py convert   --model google/gemma-3-2b-it --out gemma3_apn")
+    print("    python3 apn_complete.py benchmark --model google/gemma-3-2b-it")
+    print("    python3 apn_complete.py train     --model google/gemma-3-2b-it --data data.txt")
 
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
 def main():
-    ap = argparse.ArgumentParser(description="ProbNet Complete APN LLM System")
+    ap = argparse.ArgumentParser(description="APN Complete APN LLM System")
     ap.add_argument("command", choices=["generate","chat","convert","benchmark","train","demo","info"])
     ap.add_argument("--model",        default=None)
     ap.add_argument("--out",          default=None)
@@ -992,10 +1089,12 @@ def main():
     ap.add_argument("--cpu",          action="store_true")
     ap.add_argument("--quantize",     action="store_true")
     ap.add_argument("--dtype",        default=None, choices=["float32","float16","bfloat16"])
+    ap.add_argument("--convert",      action="store_true",
+                    help="Convert model to APN in-memory before generating/benchmarking")
     args = ap.parse_args()
 
     print("\n" + "="*70)
-    print("  ProbNet v9 — Complete APN LLM System")
+    print("  APN v9 — Complete APN LLM System")
     print("="*70)
 
     if args.command == "demo":
@@ -1011,7 +1110,7 @@ def main():
     if not args.model:
         print("ERROR: --model required")
         print("  Example: --model google/gemma-3-2b-it")
-        print("  Or run:  python3 probnet_complete.py demo")
+        print("  Or run:  python3 apn_complete.py demo")
         sys.exit(1)
 
     # Load model
@@ -1031,42 +1130,67 @@ def main():
             print(f"  Context len  : {getattr(c,'max_position_embeddings',getattr(c,'n_ctx','?'))}")
         return
 
+    # Convert model to APN (for convert/generate+--convert/benchmark/chat+--convert/train)
+    do_convert = args.command in ("convert","train") or args.convert
+    conv = None
+    if do_convert:
+        layers_arg = args.layers
+        if layers_arg not in ("all","last_half"):
+            try: layers_arg = int(layers_arg)
+            except: pass
+        conv  = APNConverter(model, tok, device, tau_init=args.tau)
+        model = conv.convert(layers_arg, verbose=True)
+        # Calibrate logit scale for GELU models (APN logits have different magnitude)
+        ffn_type = conv._detect()[2]
+        if ffn_type == "gelu" and do_convert:
+            conv.calibrate()
+
     if args.command == "generate":
-        gen = ProbNetGenerator(model, tok, device)
+        gen = APNGenerator(model, tok, device)
+        temp = args.temperature
+        # Use calibrated temperature if available
+        if conv and hasattr(conv, '_rec_temp') and conv._rec_temp:
+            temp = conv._rec_temp
+            print(f"  Using calibrated temperature={temp:.2f}")
         print(f"\n  Prompt: {args.prompt}")
         print(f"  Output: ", end="", flush=True)
         gen.generate(args.prompt, max_new_tokens=args.max_tokens,
-                     temperature=args.temperature, top_k=args.top_k,
+                     temperature=temp, top_k=args.top_k,
                      top_p=args.top_p, stream=True, system_prompt=args.system)
+        if conv:
+            print(f"\n  [APN mode — {conv.n_converted} layers converted]")
         return
-
-    # Convert model
-    layers_arg = args.layers
-    if layers_arg not in ("all","last_half"):
-        try: layers_arg = int(layers_arg)
-        except: pass
-
-    conv  = ProbNetConverter(model, tok, device, tau_init=args.tau)
-    model = conv.convert(layers_arg, verbose=True)
 
     if args.command == "convert":
         out = args.out or (args.model.replace("/","_")+"_apn")
         save_apn_model(model, tok, out)
-        print(f"\n  Done! To use:")
-        print(f"    python3 probnet_complete.py generate --model {out} --prompt 'Hello'")
-        print(f"    python3 probnet_complete.py chat     --model {out}")
+        # Generate a sample to verify conversion
+        print(f"\n  Sample generation (APN-converted):")
+        gen = APNGenerator(model, tok, device)
+        print(f"  Output: ", end="", flush=True)
+        gen.generate(args.prompt, max_new_tokens=60,
+                     temperature=args.temperature, top_k=args.top_k,
+                     top_p=args.top_p, stream=True)
+        print(f"\n\n  Done! Saved to: {out}/")
+        print(f"  To generate with APN in-memory (recommended):")
+        print(f"    python3 apn_complete.py generate --model {args.model} --convert --prompt 'Hello'")
+        print(f"  To benchmark original vs APN:")
+        print(f"    python3 apn_complete.py benchmark --model {args.model} --convert")
         return
 
     if args.command == "chat":
-        gen  = ProbNetGenerator(model, tok, device)
-        chat = ProbNetChat(gen, args.system)
+        gen  = APNGenerator(model, tok, device)
+        chat = APNChat(gen, args.system)
         chat.run(temperature=args.temperature, max_new_tokens=args.max_tokens)
         return
 
     if args.command == "benchmark":
         print("\n  Loading original model for comparison...")
         orig_model, _ = load_hf_model(args.model, device, dtype)
-        bench = ProbNetBenchmark(orig_model, model, tok, device)
+        if not conv:
+            conv  = APNConverter(model, tok, device, tau_init=args.tau)
+            model = conv.convert("all", verbose=True)
+        bench = APNBenchmark(orig_model, model, tok, device)
         bench.run()
         conv.print_specialization()
         if args.out:
@@ -1076,14 +1200,14 @@ def main():
     if args.command == "train":
         if not args.data:
             print("ERROR: --data <file.txt> required"); sys.exit(1)
-        trainer = ProbNetTrainer(model, tok, device, lr=args.lr)
+        trainer = APNTrainer(model, tok, device, lr=args.lr)
         trainer.train_file(args.data, seq_len=args.seq_len,
                            batch=args.batch, n_steps=args.steps)
         conv.print_specialization()
         out = args.out or (args.model.replace("/","_")+"_apn_trained")
         save_apn_model(model, tok, out)
         # Sample generation
-        gen  = ProbNetGenerator(model, tok, device)
+        gen  = APNGenerator(model, tok, device)
         print(f"\n  Sample output after training:")
         gen.generate(args.prompt, max_new_tokens=100,
                      temperature=args.temperature, stream=True)

@@ -38,7 +38,7 @@ Compatible with **Gemma, LLaMA, Mistral, Qwen, Phi, GPT-2** and any HuggingFace 
 - [Usage — Python](#usage--python)
 - [Experiments](#experiments)
 - [Performance](#performance)
-- [Binary Format](#pnet-binary-format)
+- [Binary Format](#apn-binary-format)
 - [Supported Models](#supported-huggingface-models)
 
 ---
@@ -122,38 +122,38 @@ pip install -r requirements.txt
 
 ### Generate text with any HuggingFace model
 ```bash
-python3 probnet_complete.py generate \
+python3 apn_complete.py generate \
     --model google/gemma-3-2b-it \
     --prompt "Explain the Fibonacci sequence"
 ```
 
 ### Interactive chat
 ```bash
-python3 probnet_complete.py chat --model google/gemma-3-2b-it
+python3 apn_complete.py chat --model google/gemma-3-2b-it
 ```
 
 ### Convert FFN → APN (replaces SwiGLU with APN, keeps all weights)
 ```bash
-python3 probnet_complete.py convert \
+python3 apn_complete.py convert \
     --model google/gemma-3-2b-it \
     --out gemma3_apn
 ```
 
 ### Benchmark APN vs original
 ```bash
-python3 probnet_complete.py benchmark --model google/gemma-3-2b-it
+python3 apn_complete.py benchmark --model google/gemma-3-2b-it
 ```
 
 ### Fine-tune APN layers on your data
 ```bash
-python3 probnet_complete.py train \
+python3 apn_complete.py train \
     --model google/gemma-3-2b-it \
     --data corpus.txt --steps 500 --lr 2e-4
 ```
 
 ### Demo (no download needed, numpy only)
 ```bash
-python3 probnet_complete.py demo
+python3 apn_complete.py demo
 ```
 
 ---
@@ -165,28 +165,28 @@ python3 probnet_complete.py demo
 make
 # or manually:
 gcc -O3 -march=native -mfma -ffast-math -funroll-loops -fopenmp \
-    -o probnet probnet_main.c -lm
+    -o apn apn_main.c -lm
 ```
 
 ### Run
 ```bash
 # Benchmark
-./probnet bench
+./apn bench
 
 # Train from scratch with BPE tokenization
-./probnet train_bpe --data corpus.txt --vocab vocab.txt --out model.pnet
+./apn train_bpe --data corpus.txt --vocab vocab.txt --out model.apn
 
 # Train from scratch (character-level)
-./probnet train --data corpus.txt --out model.pnet
+./apn train --data corpus.txt --out model.apn
 
 # Generate
-./probnet generate --model model.pnet --prompt "Once upon a time"
+./apn generate --model model.apn --prompt "Once upon a time"
 
 # Interactive chat
-./probnet chat --model model.pnet
+./apn chat --model model.apn
 
 # Model info
-./probnet info --model model.pnet
+./apn info --model model.apn
 ```
 
 ---
@@ -195,7 +195,7 @@ gcc -O3 -march=native -mfma -ffast-math -funroll-loops -fopenmp \
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                    ProbNet Transformer                        │
+│                    APN Transformer                        │
 │                                                              │
 │  tokens ─→ Embedding ─→ Pos Embed ─→ [Block × N] ─→ Norm    │
 │                                        │              │      │
@@ -248,9 +248,9 @@ Temperature τ anneals 3.0 → 0.05: starts uniform (explores all functions), en
 ## File Structure
 
 ```
-probnet/
-├── probnet_main.c              C CLI binary — train, generate, chat, bench
-├── probnet_complete.py         Python — load/convert/chat/train any HF model
+apn/
+├── apn_main.c              C CLI binary — train, generate, chat, bench
+├── apn_complete.py         Python — load/convert/chat/train any HF model
 ├── Makefile                    Build system with AVX-512 auto-detection
 ├── requirements.txt            Python dependencies
 ├── README.md                   This file
@@ -260,14 +260,14 @@ probnet/
 │   ├── optimizer.h             AdamW + cosine LR schedule
 │   ├── apn_layer.h             APN neuron: forward + backward + inference path
 │   ├── attention.h             Multi-head attention + KV cache + backward
-│   ├── transformer.h           Full transformer + backward + .pnet format
+│   ├── transformer.h           Full transformer + backward + .apn format
 │   ├── tokenizer.h             BPE/char tokenizer (HF vocab compatible)
 │   ├── generate.h              Greedy/top-k/top-p sampling + chat loop
 │   ├── train.h                 Training loop + dataset + CE loss + eval
 │   └── etok_bridge.h           BPE training bridge + end-to-end pipeline
 │
 ├── python/
-│   ├── convert_hf.py           Convert HF models → .pnet binary
+│   ├── convert_hf.py           Convert HF models → .apn binary
 │   └── train.py                Full PyTorch training (autograd + AMP + GPU)
 │
 ├── experiments/
@@ -292,11 +292,11 @@ make
 
 # With AVX-512 (only if CPU supports it — check: grep avx512f /proc/cpuinfo)
 gcc -O3 -mavx512f -mavx512dq -mavx512bw -mfma -ffast-math \
-    -funroll-loops -fopenmp -o probnet probnet_main.c -lm
+    -funroll-loops -fopenmp -o apn apn_main.c -lm
 
 # Without AVX-512 (safe default)
 gcc -O3 -march=native -mfma -ffast-math -funroll-loops -fopenmp \
-    -o probnet probnet_main.c -lm
+    -o apn apn_main.c -lm
 
 # Debug build (AddressSanitizer + UBSan)
 make debug
@@ -312,14 +312,14 @@ pip install -r requirements.txt
 ### Makefile targets
 
 ```bash
-make              # Build probnet binary
+make              # Build apn binary
 make bench        # Build + run APN benchmark
 make demo         # Build + generate demo + train small model
 make test         # Build + run benchmark
 make info         # Show system info (GCC, CPU, AVX-512)
 make install-py   # pip install Python dependencies
 make debug        # Build with sanitizers
-make clean        # Remove binary and .pnet files
+make clean        # Remove binary and .apn files
 ```
 
 ---
@@ -328,14 +328,14 @@ make clean        # Remove binary and .pnet files
 
 ### Benchmark
 ```bash
-./probnet bench
+./apn bench
 # Output: 7 regression tasks × 3 seeds, APN vs SwiGLU vs Linear
 ```
 
 ### Train with BPE tokenization
 ```bash
-./probnet train_bpe \
-    --data corpus.txt --vocab vocab.txt --out model.pnet \
+./apn train_bpe \
+    --data corpus.txt --vocab vocab.txt --out model.apn \
     --d_model 256 --n_layers 4 --n_heads 8 \
     --ffn_hidden 1024 --batch 16 --seq_len 128 \
     --epochs 10 --lr 3e-4 --target_vocab 8000
@@ -343,27 +343,27 @@ make clean        # Remove binary and .pnet files
 
 ### Train character-level
 ```bash
-./probnet train \
-    --data corpus.txt --out model.pnet \
+./apn train \
+    --data corpus.txt --out model.apn \
     --d_model 512 --n_layers 6 --n_heads 8
 ```
 
 ### Generate text
 ```bash
-./probnet generate \
-    --model model.pnet \
+./apn generate \
+    --model model.apn \
     --prompt "Once upon a time" \
     --max_tokens 200 --temperature 0.8 --top_k 50 --top_p 0.95
 ```
 
 ### Interactive chat
 ```bash
-./probnet chat --model model.pnet
+./apn chat --model model.apn
 ```
 
 ### Model info
 ```bash
-./probnet info --model model.pnet
+./apn info --model model.apn
 ```
 
 ---
@@ -489,11 +489,11 @@ python3 experiments/real_scale_validation.py
 
 ---
 
-## .pnet Binary Format
+## .apn Binary Format
 
 ```
 Offset  Size        Content
-0       4 bytes     Magic: 0x504E4554 ("PNET")
+0       4 bytes     Magic: 0x41504E00 ("APN")
 4       4 bytes     Version: 2
 8       ~84 bytes   TransformerConfig struct
 12+     V×D×4       Token embeddings (float32)
@@ -559,8 +559,8 @@ MIT
 ## Citation
 
 ```bibtex
-@software{probnet2024,
-  title = {ProbNet: Adaptive Probabilistic Neuron Transformer},
+@software{apn2024,
+  title = {APN: Adaptive Probabilistic Neuron Transformer},
   author = {VABISMO},
   year = {2024},
   url = {https://github.com/VABISMO/APN}

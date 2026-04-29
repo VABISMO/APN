@@ -1,5 +1,5 @@
 /*
- * ProbNet - apn_layer.h  (v9 — Production Stable)
+ * APN - apn_layer.h  (v9 — Production Stable)
  *
  * Adaptive Probabilistic Neuron (APN) layer.
  * Replaces the FFN in standard Transformer architecture.

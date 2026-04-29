@@ -26,7 +26,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {DEVICE}")
 
 # ================================================================
-# 1. APN Function Bank (identical to probnet_complete.py)
+# 1. APN Function Bank (identical to apn_complete.py)
 # ================================================================
 
 class APNFunction(nn.Module):

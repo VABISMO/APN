@@ -1,5 +1,5 @@
 /*
- * ProbNet - attention.h
+ * APN - attention.h
  * Multi-Head Attention with KV-cache for efficient autoregressive generation.
  * Supports standard MHA (GPT/LLaMA/Gemma style).
  * Causal masking built-in for decoder-only models.

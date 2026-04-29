@@ -11,7 +11,7 @@ from pathlib import Path
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {DEVICE}")
 
-# ── APN (from probnet_complete.py, identical) ────────────────────────
+# ── APN (from apn_complete.py, identical) ────────────────────────
 class APNFunc(nn.Module):
     NFUNCS = 6
     NAMES = ["identity", "sq-tanh", "s-sqrt", "b-prod", "sin", "relu"]

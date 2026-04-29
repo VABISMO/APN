@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-ProbNet - train.py
+APN - train.py
 ==================
 Full training script using PyTorch autograd for backprop.
-Trains the ProbNet transformer (with APN FFN layers) on text data.
+Trains the APN transformer (with APN FFN layers) on text data.
 
 Usage:
-    python3 train.py --data corpus.txt --out model.pnet [options]
-    python3 train.py --data data.txt --model existing.pnet --finetune --epochs 3
+    python3 train.py --data corpus.txt --out model.apn [options]
+    python3 train.py --data data.txt --model existing.apn --finetune --epochs 3
 
 Features:
     - Full gradient flow through all layers
@@ -34,7 +34,7 @@ try:
 except ImportError:
     HAS_TORCH = False
 
-# ─── ProbNet PyTorch Implementation ──────────────────────────────────────────
+# ─── APN PyTorch Implementation ──────────────────────────────────────────
 
 class APNLayer(nn.Module):
     """
@@ -136,7 +136,7 @@ def apply_rotary(q, k, cos, sin):
     return q, k
 
 
-class ProbNetBlock(nn.Module):
+class APNBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
         D, H, Hkv, hd = config['d_model'], config['n_heads'], config['n_kv_heads'], config['head_dim']
@@ -203,14 +203,14 @@ class ProbNetBlock(nn.Module):
         return x
 
 
-class ProbNetModel(nn.Module):
+class APNModel(nn.Module):
     def __init__(self, config: dict):
         super().__init__()
         self.config = config
         V, D = config['vocab_size'], config['d_model']
 
         self.embed     = nn.Embedding(V, D)
-        self.blocks    = nn.ModuleList([ProbNetBlock(config) for _ in range(config['n_layers'])])
+        self.blocks    = nn.ModuleList([APNBlock(config) for _ in range(config['n_layers'])])
         self.norm      = RMSNorm(D, config.get('rms_eps', 1e-5))
         self.lm_head   = nn.Linear(D, V, bias=False)
 
@@ -293,7 +293,7 @@ def train(args):
         'apn_tau1':    0.05,
     }
 
-    model = ProbNetModel(config).to(device)
+    model = APNModel(config).to(device)
     total_params = model.param_count()
     print(f"\nModel: {total_params/1e6:.1f}M parameters")
     print(f"  d_model={config['d_model']}  n_layers={config['n_layers']}")
@@ -460,13 +460,13 @@ def generate_pt(model, prompt_ids: list, max_new: int = 200,
 # ─── Benchmark ───────────────────────────────────────────────────────────────
 
 def benchmark_pt(config: dict):
-    """Compare ProbNet (APN) vs standard SwiGLU model."""
+    """Compare APN (APN) vs standard SwiGLU model."""
     if not HAS_TORCH:
         print("PyTorch required for benchmark")
         return
 
     print("\n╔══════════════════════════════════════════════════════════════════╗")
-    print("║  PyTorch Benchmark: ProbNet (APN) vs SwiGLU                      ║")
+    print("║  PyTorch Benchmark: APN (APN) vs SwiGLU                      ║")
     print("╚══════════════════════════════════════════════════════════════════╝\n")
 
     class SwiGLUFFN(nn.Module):
@@ -523,13 +523,13 @@ def benchmark_pt(config: dict):
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description='ProbNet Training')
+    parser = argparse.ArgumentParser(description='APN Training')
     sub = parser.add_subparsers(dest='cmd')
 
     # train
     p = sub.add_parser('train', help='Train from scratch')
     p.add_argument('--data',       required=True)
-    p.add_argument('--out',        default='model.pnet')
+    p.add_argument('--out',        default='model.apn')
     p.add_argument('--d_model',    type=int, default=256)
     p.add_argument('--n_layers',   type=int, default=4)
     p.add_argument('--n_heads',    type=int, default=8)
@@ -570,7 +570,7 @@ def main():
         if not HAS_TORCH:
             print("PyTorch required"); sys.exit(1)
         ckpt = torch.load(args.model, map_location='cpu')
-        model = ProbNetModel(ckpt['config'])
+        model = APNModel(ckpt['config'])
         model.load_state_dict(ckpt['state_dict'])
         prompt_ids = [ord(c) % 256 for c in args.prompt]
         print(f"Prompt: {args.prompt}")

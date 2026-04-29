@@ -1,18 +1,18 @@
 CC      = gcc
 CFLAGS  = -O3 -march=native -ffast-math -funroll-loops -fopenmp -mfma
 LDFLAGS = -lm
-TARGET  = probnet
+TARGET  = apn
 
 # Auto-detect AVX-512
 AVX512 := $(shell echo | $(CC) -mavx512f -x c -E - 2>/dev/null && echo 1 || echo 0)
 ifeq ($(AVX512),1)
   CFLAGS += -mavx512f -mavx512dq -mavx512bw
-  $(info [ProbNet] AVX-512 detected - using SIMD acceleration)
+  $(info [APN] AVX-512 detected - using SIMD acceleration)
 else
-  $(info [ProbNet] No AVX-512 - using AVX2/FMA fallback)
+  $(info [APN] No AVX-512 - using AVX2/FMA fallback)
 endif
 
-SRCS = probnet_main.c
+SRCS = apn_main.c
 HDRS = src/tensor.h src/optimizer.h src/apn_layer.h src/attention.h \
        src/transformer.h src/tokenizer.h src/generate.h src/train.h
 
@@ -21,17 +21,17 @@ HDRS = src/tensor.h src/optimizer.h src/apn_layer.h src/attention.h \
 all: $(TARGET)
 	@echo ""
 	@echo "  ╔══════════════════════════════════════════════════════╗"
-	@echo "  ║  ProbNet v9 built successfully!                      ║"
+	@echo "  ║  APN v9 built successfully!                           ║"
 	@echo "  ╠══════════════════════════════════════════════════════╣"
-	@echo "  ║  ./probnet bench              APN vs SwiGLU bench    ║"
-	@echo "  ║  ./probnet train --data f.txt  Train from scratch    ║"
-	@echo "  ║  ./probnet generate --model m.pnet --prompt 'Hi'     ║"
-	@echo "  ║  ./probnet chat    --model m.pnet  Interactive chat  ║"
-	@echo "  ║  ./probnet info    --model m.pnet  Show model info   ║"
+	@echo "  ║  ./apn bench              APN vs SwiGLU bench         ║"
+	@echo "  ║  ./apn train --data f.txt  Train from scratch        ║"
+	@echo "  ║  ./apn generate --model m.apn --prompt 'Hi'          ║"
+	@echo "  ║  ./apn chat    --model m.apn  Interactive chat      ║"
+	@echo "  ║  ./apn info    --model m.apn  Show model info        ║"
 	@echo "  ╠══════════════════════════════════════════════════════╣"
 	@echo "  ║  HuggingFace conversion (needs: pip install torch    ║"
 	@echo "  ║                          transformers safetensors):  ║"
-	@echo "  ║  python3 probnet_complete.py convert                 ║"
+	@echo "  ║  python3 apn_complete.py convert                      ║"
 	@echo "  ║    --model google/gemma-3-2b-it --out gemma3_apn     ║"
 	@echo "  ╚══════════════════════════════════════════════════════╝"
 	@echo ""
@@ -55,9 +55,9 @@ print('Generated examples/demo_corpus.txt')\n\
 "
 	./$(TARGET) train \
 		--data examples/demo_corpus.txt \
-		--out  demo.pnet \
+		--out  demo.apn \
 		--d_model 64 --n_layers 2 --n_heads 4 --ffn_hidden 256
-	./$(TARGET) generate --model demo.pnet --prompt "the cat" --max_tokens 60
+	./$(TARGET) generate --model demo.apn --prompt "the cat" --max_tokens 60
 
 info:
 	@echo "System info:"
@@ -77,5 +77,5 @@ debug: CFLAGS = -g -O0 -fsanitize=address,undefined -fopenmp
 debug: $(TARGET)
 
 clean:
-	rm -f $(TARGET) *.pnet demo_corpus.txt
+	rm -f $(TARGET) *.apn demo_corpus.txt
 	rm -rf __pycache__ *_apn *_apn_trained

@@ -1,5 +1,5 @@
 /*
- * ProbNet - optimizer.h
+ * APN - optimizer.h
  * AdamW optimizer with gradient clipping and parameter groups
  */
 #pragma once

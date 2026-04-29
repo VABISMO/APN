@@ -1,5 +1,5 @@
 /*
- * ProbNet - tokenizer.h
+ * APN - tokenizer.h
  * BPE tokenizer fully compatible with LLaMA/Gemma vocabulary format.
  * Supports:
  *   - Loading from HuggingFace tokenizer.json
