@@ -11,7 +11,7 @@ Compatible with **Gemma, LLaMA, Mistral, Qwen, Phi, GPT-2** and any HuggingFace 
 | Task | Linear | SwiGLU | APN | APN vs SwiGLU |
 |------|--------|--------|-----|---------------|
 | **Linear** y=Wx | 0.017 | 0.328 | **0.001** | **240x better** |
-| **Sqrt** y=sqrt(|x0|) | 0.815 | 0.145 | **0.015** | **9.7x better** |
+| **Sqrt** y=sqrt(\|x0\|) | 0.815 | 0.145 | **0.015** | **9.7x better** |
 | **Mixed** r+prod | 0.703 | 0.183 | **0.110** | **1.7x better** |
 | **Ratio** x0/x1 | 0.794 | 0.145 | **0.097** | **1.5x better** |
 | Product x0*x1 | 1.079 | 0.790 | 0.793 | Tie |
