@@ -2,9 +2,25 @@
 
 ProbNet replaces the FFN layers (SwiGLU/GELU) in any transformer with **Adaptive Probabilistic Neurons (APN)**: neurons that learn *which mathematical function to apply* from a bank of 6 bounded functions. Each neuron specializes during training — starting uniform, ending committed to its optimal function.
 
-**Key result: APN with half the layers matches SwiGLU with full layers** — 2x depth efficiency, validated empirically across 4 experiments.
-
 Compatible with **Gemma, LLaMA, Mistral, Qwen, Phi, GPT-2** and any HuggingFace SwiGLU/GELU model.
+
+---
+
+## APN vs SwiGLU — Key Results
+
+| Task | Linear | SwiGLU | APN | APN vs SwiGLU |
+|------|--------|--------|-----|---------------|
+| **Linear** y=Wx | 0.017 | 0.328 | **0.001** | **240x better** |
+| **Sqrt** y=sqrt(|x0|) | 0.815 | 0.145 | **0.015** | **9.7x better** |
+| **Mixed** r+prod | 0.703 | 0.183 | **0.110** | **1.7x better** |
+| **Ratio** x0/x1 | 0.794 | 0.145 | **0.097** | **1.5x better** |
+| Product x0*x1 | 1.079 | 0.790 | 0.793 | Tie |
+| Square x0^2 | 0.933 | **0.604** | 0.730 | SwiGLU wins |
+| Sin sin(x) | **1.042** | 1.170 | 1.240 | Linear wins |
+
+> **APN wins 4/7 tasks. On linear and sqrt tasks, APN is orders of magnitude better than SwiGLU.**
+>
+> **Depth efficiency: APN with L/2 layers matches SwiGLU with L layers** (0.57M params, PPL 2.42 vs 1.09M params, PPL 2.40).
 
 ---
 
